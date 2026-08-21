@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;700&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+<?!= include('Stylesheet'); ?>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Cafe Tan90 — Attendance</h1>
+  <p class="subtitle">Tap your name's button when you arrive, and again when you leave.</p>
+
+  <div class="card">
+    <div class="date-banner">
+      <span class="day" id="today-day">—</span>
+      <span class="date" id="today-date">—</span>
+    </div>
+    <p class="hint">Times are logged to the second, straight into today's Google Sheet.</p>
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th></tr>
+      </thead>
+      <tbody id="attendance-body"></tbody>
+    </table>
+  </div>
+
+  <div class="card task-table-wrap">
+    <h2>Today's tasks</h2>
+    <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in — tap "Mark done" as each task gets finished.</p>
+    <table>
+      <thead id="task-thead"></thead>
+      <tbody id="task-body"></tbody>
+    </table>
+  </div>
+
+  <footer>Times shown in Asia/Bangkok time. <a href="?page=admin" target="_top">Admin page</a></footer>
+</div>
+
+<script>
+var lastData = null;
+var busy = false;
+
+function refresh() {
+  google.script.run.withSuccessHandler(render).withFailureHandler(onError).getStaffData();
+}
+
+function logIn(id) {
+  if (busy) return;
+  busy = true;
+  google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
+    .withFailureHandler(function (e) { busy = false; onError(e); })
+    .logAction(id, 'in');
+}
+function logOut(id) {
+  if (busy) return;
+  busy = true;
+  google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
+    .withFailureHandler(function (e) { busy = false; onError(e); })
+    .logAction(id, 'out');
+}
+function markDone(id, col) {
+  if (busy) return;
+  busy = true;
+  google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
+    .withFailureHandler(function (e) { busy = false; onError(e); })
+    .completeTask(id, col);
+}
+
+function onError(e) {
+  console.error(e);
+}
+
+function render(data) {
+  lastData = data;
+  document.getElementById('today-day').textContent = data.day;
+  document.getElementById('today-date').textContent = data.date;
+
+  var body = document.getElementById('attendance-body');
+  body.innerHTML = '';
+  data.employees.forEach(function (emp) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="name-cell">' + emp.name + '</td>' +
+      '<td><span class="pill ' + (emp.present ? 'present' : 'absent') + '">' + (emp.present ? 'Present' : 'Not in yet') + '</span></td>' +
+      '<td><button class="time-btn ' + (emp.loginTime ? 'logged' : 'primary') + '" ' + (emp.loginTime ? 'disabled' : '') +
+        ' onclick="logIn(\'' + emp.id + '\')">' + (emp.loginTime ? 'In · ' + emp.loginTime : 'Log in') + '</button></td>' +
+      '<td><button class="time-btn ' + (emp.logoutTime ? 'out-logged' : '') + '" ' + (!emp.loginTime || emp.logoutTime ? 'disabled' : '') +
+        ' onclick="logOut(\'' + emp.id + '\')">' + (emp.logoutTime ? 'Out · ' + emp.logoutTime : 'Log out') + '</button></td>';
+    body.appendChild(tr);
+  });
+
+  renderTaskTable(data.employees);
+}
+
+// Tasks go down as rows, employees go across as columns — reads better once
+// there are more than a couple of tasks (no horizontal scrolling to track
+// down a task, and it matches the admin page's layout).
+function renderTaskTable(employees) {
+  var taskCount = employees.length ? employees[0].tasks.length : 0;
+
+  var thead = document.getElementById('task-thead');
+  thead.innerHTML = '<tr><th>Task</th>' + employees.map(function (emp) {
+    return '<th class="task-col">' + emp.name + '<br>' +
+      (emp.present ? '<span class="pill present">Present</span>' : '<span class="pill absent">Not in yet</span>') +
+      '</th>';
+  }).join('') + '</tr>';
+
+  var tbody = document.getElementById('task-body');
+  tbody.innerHTML = '';
+  for (var ti = 0; ti < taskCount; ti++) {
+    var tr = document.createElement('tr');
+    var taskName = employees[0].tasks[ti].name;
+    var cells = employees.map(function (emp) {
+      var t = emp.tasks[ti];
+      var faded = !emp.present ? ' emp-faded' : '';
+      if (!t.assigned) return '<td class="task-col' + faded + '"><span class="not-applicable">–</span></td>';
+      if (t.completedAt) return '<td class="task-col' + faded + '"><span class="task-done-pill">✓ Done · ' + t.completedAt + '</span></td>';
+      return '<td class="task-col' + faded + '"><button class="task-btn" ' + (!emp.present ? 'disabled' : '') +
+        ' onclick="markDone(\'' + emp.id + '\',' + t.col + ')">Mark done</button></td>';
+    }).join('');
+    tr.innerHTML = '<td class="name-cell">' + taskName + '</td>' + cells;
+    tbody.appendChild(tr);
+  }
+}
+
+refresh();
+setInterval(refresh, 15000); // keep the shared screen in sync if two people act close together
+</script>
+</body>
+</html>

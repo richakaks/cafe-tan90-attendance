@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;700&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+<?!= include('Stylesheet'); ?>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Cafe Tan90 — Admin</h1>
+  <p class="subtitle">Set today's tasks and who's doing them. "Present today" fills itself in from the staff page — you don't touch it here.</p>
+
+  <div class="card lock-screen" id="admin-lock">
+    <h2>Admin access</h2>
+    <p class="hint">Enter the admin PIN.</p>
+    <input type="password" id="pin-input" placeholder="PIN" maxlength="12" onkeydown="if(event.key==='Enter')unlockAdmin();">
+    <div class="buttons" style="justify-content:center;">
+      <button class="btn primary" onclick="unlockAdmin()">Unlock</button>
+    </div>
+  </div>
+
+  <div id="admin-panel" style="display:none;">
+    <div class="card">
+      <h2>This month's data</h2>
+      <p class="hint">Everything staff log gets written straight into this Google Sheet — opens straight to today's tab.</p>
+      <div class="buttons">
+        <button class="btn" onclick="openSheet()">Open this month's Sheet ↗</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Employees</h2>
+      <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward — their past attendance history stays exactly as it was in the Sheet.</p>
+      <table>
+        <thead><tr><th>Name</th><th></th></tr></thead>
+        <tbody id="employee-body"></tbody>
+      </table>
+      <div class="buttons">
+        <button class="btn" onclick="addEmployeeFlow()">+ Add employee</button>
+      </div>
+      <p class="hint" id="employee-status" style="margin-top:10px;"></p>
+    </div>
+
+    <div class="card">
+      <h2>Today's tasks</h2>
+      <p class="hint">Add each task once, then tick who's doing it today.</p>
+      <table>
+        <thead id="admin-thead"></thead>
+        <tbody id="admin-body"></tbody>
+      </table>
+      <div class="buttons">
+        <button class="btn" onclick="addTaskRow()">+ Add task</button>
+        <button class="btn" onclick="copyYesterday()">Copy yesterday's tasks</button>
+        <button class="btn primary" onclick="saveTasks()">Save tasks</button>
+      </div>
+      <p class="hint" id="save-status" style="margin-top:10px;"></p>
+    </div>
+  </div>
+
+  <footer><a href="?" target="_top">Back to staff view</a></footer>
+</div>
+
+<script>
+var pin = null;
+var EMPLOYEES = []; // [{id, name}, ...] — active employees only
+var tasks = [];
+
+function unlockAdmin() {
+  var val = document.getElementById('pin-input').value;
+  google.script.run.withSuccessHandler(function (data) {
+    pin = val;
+    EMPLOYEES = data.employees;
+    tasks = data.tasks;
+    document.getElementById('admin-lock').style.display = 'none';
+    document.getElementById('admin-panel').style.display = 'block';
+    renderAdmin();
+    renderEmployeeList();
+  }).withFailureHandler(function () {
+    alert('Wrong PIN.');
+  }).getAdminData(val);
+}
+
+// ---- Task assignment table (tasks as rows, employees as columns) ----
+
+function renderAdmin() {
+  var thead = document.getElementById('admin-thead');
+  thead.innerHTML = '<tr><th>Task</th>' + EMPLOYEES.map(function (e) { return '<th class="task-col">' + e.name + '</th>'; }).join('') + '<th></th></tr>';
+  var body = document.getElementById('admin-body');
+  body.innerHTML = '';
+  tasks.forEach(function (t, ti) {
+    var tr = document.createElement('tr');
+    var checks = EMPLOYEES.map(function (emp) {
+      var checked = t.assignments[emp.id] ? 'checked' : '';
+      return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + emp.id + '\',this.checked)"></td>';
+    }).join('');
+    tr.innerHTML =
+      '<td><input type="text" class="task-name-input" value="' + t.name + '" onchange="renameTask(' + ti + ',this.value)"></td>' +
+      checks +
+      '<td><button class="btn ghost" onclick="removeTask(' + ti + ')">✕</button></td>';
+    body.appendChild(tr);
+  });
+}
+
+function toggleAssign(ti, empId, val) { tasks[ti].assignments[empId] = val; }
+function renameTask(ti, val) { tasks[ti].name = val; }
+function removeTask(ti) { tasks.splice(ti, 1); renderAdmin(); }
+
+function addTaskRow() {
+  if (tasks.length >= 8) { alert('Max 8 tasks per day.'); return; }
+  var blank = {};
+  EMPLOYEES.forEach(function (e) { blank[e.id] = false; });
+  tasks.push({ name: 'New task', assignments: blank });
+  renderAdmin();
+}
+
+function copyYesterday() {
+  google.script.run.withSuccessHandler(function (data) {
+    tasks = data.tasks;
+    renderAdmin();
+    document.getElementById('save-status').textContent = 'Copied yesterday\'s tasks — click Save tasks to apply.';
+  }).withFailureHandler(function () { alert('Could not copy yesterday\'s tasks.'); }).copyYesterdayTasks(pin);
+}
+
+function saveTasks() {
+  document.getElementById('save-status').textContent = 'Saving…';
+  google.script.run.withSuccessHandler(function (data) {
+    tasks = data.tasks;
+    renderAdmin();
+    document.getElementById('save-status').textContent = 'Saved to today\'s sheet.';
+  }).withFailureHandler(function () {
+    document.getElementById('save-status').textContent = 'Could not save — try again.';
+  }).saveTasks(pin, tasks);
+}
+
+function openSheet() {
+  // Open the tab synchronously on the click itself (before the server call
+  // returns) so browsers don't treat it as a blocked pop-up, then fill in
+  // the real URL once we have it.
+  var win = window.open('', '_blank');
+  google.script.run.withSuccessHandler(function (url) {
+    if (win) win.location = url;
+  }).withFailureHandler(function () {
+    if (win) win.close();
+    alert('Could not open the sheet — try again.');
+  }).getSheetUrl(pin);
+}
+
+// ---- Employee roster ----
+
+function renderEmployeeList() {
+  var body = document.getElementById('employee-body');
+  body.innerHTML = '';
+  EMPLOYEES.forEach(function (emp) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input type="text" class="task-name-input" value="' + emp.name + '" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value)"></td>' +
+      '<td><button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\', \'' + emp.name.replace(/'/g, "\\'") + '\')">✕</button></td>';
+    body.appendChild(tr);
+  });
+}
+
+function addEmployeeFlow() {
+  if (EMPLOYEES.length >= 8) { alert('Max 8 employees — remove someone first.'); return; }
+  var name = prompt("New employee's name:");
+  if (!name) return;
+  document.getElementById('employee-status').textContent = 'Adding…';
+  google.script.run.withSuccessHandler(function (result) {
+    EMPLOYEES = result.employees;
+    // Give the freshly-added person a (default unchecked) column in any
+    // task rows the admin hasn't saved yet, without touching other
+    // in-progress, unsaved edits.
+    tasks.forEach(function (t) {
+      if (!(result.id in t.assignments)) t.assignments[result.id] = false;
+    });
+    renderAdmin();
+    renderEmployeeList();
+    document.getElementById('employee-status').textContent = 'Added ' + result.name + '.';
+  }).withFailureHandler(function (e) {
+    document.getElementById('employee-status').textContent = 'Could not add — ' + (e && e.message ? e.message : 'try again.');
+  }).addEmployee(pin, name);
+}
+
+function renameEmployeeFlow(id, newName) {
+  document.getElementById('employee-status').textContent = 'Saving…';
+  google.script.run.withSuccessHandler(function (result) {
+    EMPLOYEES = result.employees;
+    renderAdmin();
+    renderEmployeeList();
+    document.getElementById('employee-status').textContent = 'Saved.';
+  }).withFailureHandler(function () {
+    document.getElementById('employee-status').textContent = 'Could not rename — try again.';
+    renderEmployeeList();
+  }).renameEmployee(pin, id, newName);
+}
+
+function removeEmployeeFlow(id, name) {
+  if (!confirm('Remove ' + name + ' from the active roster? Their past attendance history stays in the Sheet.')) return;
+  document.getElementById('employee-status').textContent = 'Removing…';
+  google.script.run.withSuccessHandler(function (result) {
+    EMPLOYEES = result.employees;
+    renderAdmin();
+    renderEmployeeList();
+    document.getElementById('employee-status').textContent = 'Removed ' + name + '.';
+  }).withFailureHandler(function () {
+    document.getElementById('employee-status').textContent = 'Could not remove — try again.';
+  }).removeEmployee(pin, id);
+}
+</script>
+</body>
+</html>

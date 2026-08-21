@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cafe Tan90 Attendance — preview</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;700&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #1F3864;
+    --navy-light: #DCE6F1;
+    --border: #D9DDE3;
+    --text-primary: #1B1F27;
+    --text-secondary: #5C6370;
+    --green-bg: #E1F5EE;
+    --green-text: #085041;
+    --amber-bg: #FAEEDA;
+    --amber-text: #633806;
+    --muted-bg: #F5F6F8;
+    --red-bg: #FBEAEA;
+    --red-text: #8A2C2C;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Inter", "Noto Sans Thai", sans-serif;
+    background: #F5F6F8;
+    color: var(--text-primary);
+    margin: 0;
+    padding: 32px 16px 64px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 700; color: var(--navy); margin: 0 0 6px; }
+  .subtitle { font-size: 14px; color: var(--text-secondary); margin: 0 0 20px; line-height: 1.6; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; }
+  .card h2 { font-size: 15px; font-weight: 700; color: var(--navy); margin: 0 0 4px; }
+  .card p.hint { font-size: 12px; color: var(--text-secondary); margin: 0 0 14px; line-height: 1.6; }
+
+  .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+  .tab-btn {
+    font-family: inherit; font-size: 13px; font-weight: 500; padding: 10px 18px;
+    border-radius: 8px; border: 1px solid var(--border); background: #fff;
+    color: var(--text-primary); cursor: pointer;
+  }
+  .tab-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .date-banner { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .date-banner .day { font-size: 20px; font-weight: 700; color: var(--navy); }
+  .date-banner .date { font-size: 14px; color: var(--text-secondary); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 500; color: var(--text-secondary); padding: 10px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  td.name-cell { font-weight: 600; }
+
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill.present { background: var(--green-bg); color: var(--green-text); }
+  .pill.absent { background: var(--muted-bg); color: var(--text-secondary); }
+
+  .time-btn {
+    font-family: inherit; font-size: 13px; font-weight: 500; padding: 9px 16px;
+    border-radius: 8px; border: 1px solid var(--border); background: #fff;
+    color: var(--text-primary); cursor: pointer; min-width: 120px;
+  }
+  .time-btn:hover { background: var(--muted-bg); }
+  .time-btn.primary { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .time-btn.primary:hover { background: #16294a; }
+  .time-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .time-btn.logged { background: var(--green-bg); color: var(--green-text); border-color: #B7E4D6; cursor: default; }
+  .time-btn.out-logged { background: var(--red-bg); color: var(--red-text); border-color: #E9C4C4; cursor: default; }
+
+  .task-table-wrap tr.faded td { opacity: 0.4; pointer-events: none; }
+  .task-table-wrap td.emp-faded { opacity: 0.4; pointer-events: none; }
+  .task-table-wrap th.task-col { line-height: 1.9; }
+  .task-table-wrap .not-yet { font-size: 12px; color: var(--text-secondary); font-style: italic; }
+  .task-table-wrap .not-applicable { color: var(--text-secondary); opacity: 0.5; }
+
+  .task-btn {
+    font-family: inherit; font-size: 12px; font-weight: 600; padding: 7px 14px;
+    border-radius: 999px; border: 1px solid var(--navy); background: #fff;
+    color: var(--navy); cursor: pointer; white-space: nowrap;
+  }
+  .task-btn:hover { background: var(--navy-light); }
+  .task-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .task-done-pill {
+    display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px;
+    border-radius: 999px; background: var(--green-bg); color: var(--green-text);
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+
+  td.tick { color: var(--navy); font-weight: 700; text-align: center; }
+  td.dash { color: var(--text-secondary); opacity: 0.5; text-align: center; }
+  th.task-col, td.task-col { text-align: center; }
+
+  .admin-row { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .task-name-input { font-family: inherit; font-size: 13px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; width: 100%; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  button.btn {
+    font-family: inherit; font-size: 13px; font-weight: 500; padding: 10px 16px;
+    border-radius: 8px; border: 1px solid var(--border); background: #fff;
+    color: var(--text-primary); cursor: pointer;
+  }
+  button.btn:hover { background: var(--muted-bg); }
+  button.btn.primary { background: var(--navy); color: #fff; border-color: var(--navy); }
+  button.btn.primary:hover { background: #16294a; }
+  button.btn.ghost { color: var(--text-secondary); border: none; background: none; padding: 6px 8px; }
+  button.btn.ghost:hover { color: var(--red-text); }
+
+  .lock-screen { text-align: center; padding: 40px 20px; }
+  .lock-screen input { text-align: center; font-size: 16px; letter-spacing: 4px; width: 160px; }
+
+  footer { font-size: 12px; color: var(--text-secondary); line-height: 1.7; margin-top: 8px; }
+  .note-box { background: var(--navy-light); color: var(--navy); border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.6; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Cafe Tan90 — Attendance</h1>
+  <p class="subtitle">Preview build — this is an in-browser mockup so you can see and click through the design. The real version runs on Google Apps Script and writes every log-in/out and task completion straight into a live Google Sheet.</p>
+
+  <div class="note-box">
+    This is a design preview only — nothing here is saved anywhere. The production version (Apps Script files, delivered separately) works exactly like this but syncs live to Google Sheets. To see the fade/present/task-done flow, try logging someone in on the Staff tab, then come mark a task done.
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-staff" onclick="showView('staff')">Staff view</button>
+    <button class="tab-btn" id="tab-admin" onclick="showView('admin')">Admin view</button>
+  </div>
+
+  <!-- STAFF VIEW -->
+  <div class="view active" id="view-staff">
+
+    <div class="card">
+      <div class="date-banner">
+        <span class="day" id="today-day"></span>
+        <span class="date" id="today-date"></span>
+      </div>
+      <p class="hint">Tap your name's button when you arrive, and again when you leave. Times are logged to the second.</p>
+
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th></tr>
+        </thead>
+        <tbody id="attendance-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card task-table-wrap">
+      <h2>Today's tasks</h2>
+      <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in — until then it stays faded as a reminder they haven't started yet. Tap "Mark done" as each task is finished; it logs the time too.</p>
+      <table>
+        <thead id="task-thead"></thead>
+        <tbody id="task-body"></tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- ADMIN VIEW -->
+  <div class="view" id="view-admin">
+
+    <div class="card lock-screen" id="admin-lock">
+      <h2>Admin access</h2>
+      <p class="hint">Enter the admin PIN to set today's tasks.</p>
+      <input type="password" id="pin-input" placeholder="PIN" maxlength="6">
+      <div class="buttons" style="justify-content:center;">
+        <button class="btn primary" onclick="unlockAdmin()">Unlock</button>
+      </div>
+      <p class="hint" style="margin-top:14px;">Preview PIN: <b>1234</b> — in the real version you set your own PIN in the script.</p>
+    </div>
+
+    <div id="admin-panel" style="display:none;">
+      <div class="card">
+        <h2>This month's data</h2>
+        <p class="hint">Everything staff log gets written straight into a Google Sheet — this button opens straight to today's tab. (In this preview it's just a placeholder — it goes live once the real version is deployed.)</p>
+        <div class="buttons">
+          <button class="btn" onclick="alert('This opens the real Google Sheet once the app is deployed — nothing to click through to yet in this preview.')">Open this month's Sheet ↗</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Employees</h2>
+        <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward — their past attendance history stays exactly as it was in the Sheet.</p>
+        <table>
+          <thead><tr><th>Name</th><th></th></tr></thead>
+          <tbody id="employee-body"></tbody>
+        </table>
+        <div class="buttons">
+          <button class="btn" onclick="addEmployeeFlow()">+ Add employee</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Assign today's tasks</h2>
+        <p class="hint">Add each task once, then tick who's doing it. "Present today" ticks itself in — no need to touch it here.</p>
+        <table>
+          <thead id="admin-thead"></thead>
+          <tbody id="admin-body"></tbody>
+        </table>
+        <div class="buttons">
+          <button class="btn" onclick="addTaskRow()">+ Add task</button>
+          <button class="btn" onclick="copyYesterday()">Copy yesterday's tasks</button>
+          <button class="btn primary" onclick="saveTasks()">Save tasks</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <footer>Preview build · times shown in Asia/Bangkok time</footer>
+
+</div>
+
+<script>
+// state.employees is the single source of truth for the roster in this
+// preview — both the Staff table and the Admin task-assignment columns
+// read from it, same as the real app treats its employee slots.
+var state = {
+  employees: [
+    { id: 'MIW', name: 'Miw', loginTime: null, logoutTime: null, present: false },
+    { id: 'NUREEN', name: 'Nureen', loginTime: null, logoutTime: null, present: false },
+    { id: 'RICHA', name: 'Richa', loginTime: null, logoutTime: null, present: false }
+  ],
+  tasks: [
+    { name: 'Open register & float check', assignments: { MIW: true, NUREEN: true, RICHA: false } },
+    { name: 'Restock milk & syrups', assignments: { MIW: false, NUREEN: true, RICHA: true } }
+  ],
+  // completions[employeeId][taskIndex] = "HH:MM:SS" once marked done
+  completions: { MIW: {}, NUREEN: {}, RICHA: {} }
+};
+
+// in-memory "yesterday" sample so Copy-yesterday has something to show
+var YESTERDAY_TASKS = [
+  { name: 'Open register & float check', assignments: { MIW: true, NUREEN: false, RICHA: true } },
+  { name: 'Restock milk & syrups', assignments: { MIW: false, NUREEN: true, RICHA: false } }
+];
+
+var adminUnlocked = false;
+var employeeSeq = 4; // next new employee gets id EMP4, EMP5, ...
+
+function pad(n) { return n < 10 ? '0' + n : '' + n; }
+function nowTimeStr() {
+  var d = new Date();
+  return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+}
+
+function showView(name) {
+  document.getElementById('view-staff').classList.toggle('active', name === 'staff');
+  document.getElementById('view-admin').classList.toggle('active', name === 'admin');
+  document.getElementById('tab-staff').classList.toggle('active', name === 'staff');
+  document.getElementById('tab-admin').classList.toggle('active', name === 'admin');
+}
+
+function renderDate() {
+  var d = new Date();
+  var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  document.getElementById('today-day').textContent = dayNames[d.getDay()];
+  document.getElementById('today-date').textContent = monthNames[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+}
+
+function logIn(id) {
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (emp.loginTime) return;
+  emp.loginTime = nowTimeStr();
+  emp.present = true;
+  renderStaff();
+}
+function logOut(id) {
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp.loginTime || emp.logoutTime) return;
+  emp.logoutTime = nowTimeStr();
+  renderStaff();
+}
+function markDone(id, ti) {
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp.present) return;
+  if (!state.tasks[ti].assignments[id]) return;
+  if (!state.completions[id]) state.completions[id] = {};
+  if (state.completions[id][ti]) return;
+  state.completions[id][ti] = nowTimeStr();
+  renderStaff();
+}
+
+function renderStaff() {
+  var body = document.getElementById('attendance-body');
+  body.innerHTML = '';
+  state.employees.forEach(function (emp) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="name-cell">' + emp.name + '</td>' +
+      '<td><span class="pill ' + (emp.present ? 'present' : 'absent') + '">' + (emp.present ? 'Present' : 'Not in yet') + '</span></td>' +
+      '<td><button class="time-btn ' + (emp.loginTime ? 'logged' : 'primary') + '" ' + (emp.loginTime ? 'disabled' : '') + ' onclick="logIn(\'' + emp.id + '\')">' +
+        (emp.loginTime ? 'In · ' + emp.loginTime : 'Log in') + '</button></td>' +
+      '<td><button class="time-btn ' + (emp.logoutTime ? 'out-logged' : '') + '" ' + (!emp.loginTime || emp.logoutTime ? 'disabled' : '') + ' onclick="logOut(\'' + emp.id + '\')">' +
+        (emp.logoutTime ? 'Out · ' + emp.logoutTime : 'Log out') + '</button></td>';
+    body.appendChild(tr);
+  });
+  renderTaskTable();
+}
+
+// Tasks go down as rows, employees go across as columns — reads better once
+// there are more than a couple of tasks, and matches the admin page's layout.
+function renderTaskTable() {
+  var thead = document.getElementById('task-thead');
+  var body = document.getElementById('task-body');
+  thead.innerHTML = '<tr><th>Task</th>' + state.employees.map(function (emp) {
+    return '<th class="task-col">' + emp.name + '<br>' +
+      (emp.present ? '<span class="pill present">Present</span>' : '<span class="pill absent">Not in yet</span>') +
+      '</th>';
+  }).join('') + '</tr>';
+  body.innerHTML = '';
+  state.tasks.forEach(function (t, ti) {
+    var tr = document.createElement('tr');
+    var cells = state.employees.map(function (emp) {
+      var has = !!t.assignments[emp.id];
+      var faded = !emp.present ? ' emp-faded' : '';
+      if (!has) return '<td class="task-col' + faded + '"><span class="not-applicable">–</span></td>';
+      var doneAt = (state.completions[emp.id] || {})[ti];
+      if (doneAt) return '<td class="task-col' + faded + '"><span class="task-done-pill">✓ Done · ' + doneAt + '</span></td>';
+      return '<td class="task-col' + faded + '"><button class="task-btn" ' + (!emp.present ? 'disabled' : '') + ' onclick="markDone(\'' + emp.id + '\',' + ti + ')">Mark done</button></td>';
+    }).join('');
+    tr.innerHTML = '<td class="name-cell">' + t.name + '</td>' + cells;
+    body.appendChild(tr);
+  });
+}
+
+// ---- Admin ----
+function unlockAdmin() {
+  var pin = document.getElementById('pin-input').value;
+  if (pin === '1234') {
+    adminUnlocked = true;
+    document.getElementById('admin-lock').style.display = 'none';
+    document.getElementById('admin-panel').style.display = 'block';
+    renderAdmin();
+    renderEmployeeList();
+  } else {
+    alert('Wrong PIN (preview PIN is 1234)');
+  }
+}
+
+function renderAdmin() {
+  var thead = document.getElementById('admin-thead');
+  thead.innerHTML = '<tr><th>Task</th>' + state.employees.map(function (e) { return '<th class="task-col">' + e.name + '</th>'; }).join('') + '<th></th></tr>';
+  var body = document.getElementById('admin-body');
+  body.innerHTML = '';
+  state.tasks.forEach(function (t, ti) {
+    var tr = document.createElement('tr');
+    var checks = state.employees.map(function (e) {
+      var checked = t.assignments[e.id] ? 'checked' : '';
+      return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + e.id + '\',this.checked)"></td>';
+    }).join('');
+    tr.innerHTML =
+      '<td><input type="text" class="task-name-input" value="' + t.name + '" onchange="renameTask(' + ti + ',this.value)"></td>' +
+      checks +
+      '<td><button class="btn ghost" onclick="removeTask(' + ti + ')">✕</button></td>';
+    body.appendChild(tr);
+  });
+}
+function toggleAssign(ti, empId, val) { state.tasks[ti].assignments[empId] = val; }
+function renameTask(ti, val) { state.tasks[ti].name = val; }
+function removeTask(ti) { state.tasks.splice(ti, 1); renderAdmin(); }
+function addTaskRow() {
+  if (state.tasks.length >= 8) { alert('Preview caps this at 8 tasks per day.'); return; }
+  var blank = {}; state.employees.forEach(function (e) { blank[e.id] = false; });
+  state.tasks.push({ name: 'New task', assignments: blank });
+  renderAdmin();
+}
+function copyYesterday() {
+  state.tasks = YESTERDAY_TASKS.map(function (t) { return { name: t.name, assignments: Object.assign({}, t.assignments) }; });
+  var fresh = {}; state.employees.forEach(function (e) { fresh[e.id] = {}; });
+  state.completions = fresh; // fresh day starts with nothing marked done
+  renderAdmin();
+}
+function saveTasks() {
+  renderTaskTable();
+  alert('Saved. In the real version this writes straight into today\'s Google Sheet tab.');
+}
+
+// ---- Employee roster ----
+function renderEmployeeList() {
+  var body = document.getElementById('employee-body');
+  body.innerHTML = '';
+  state.employees.forEach(function (emp) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input type="text" class="task-name-input" value="' + emp.name + '" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value)"></td>' +
+      '<td><button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\')">✕</button></td>';
+    body.appendChild(tr);
+  });
+}
+
+function addEmployeeFlow() {
+  if (state.employees.length >= 8) { alert('Preview caps this at 8 employees — remove someone first.'); return; }
+  var name = prompt("New employee's name:");
+  if (!name) return;
+  var id = 'EMP' + (employeeSeq++);
+  state.employees.push({ id: id, name: name, loginTime: null, logoutTime: null, present: false });
+  state.completions[id] = {};
+  state.tasks.forEach(function (t) { t.assignments[id] = false; });
+  renderAdmin();
+  renderEmployeeList();
+  renderStaff();
+}
+
+function renameEmployeeFlow(id, newName) {
+  newName = (newName || '').trim();
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp) return;
+  if (!newName) { renderEmployeeList(); return; }
+  emp.name = newName;
+  renderAdmin();
+  renderEmployeeList();
+  renderStaff();
+}
+
+function removeEmployeeFlow(id) {
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp) return;
+  if (!confirm('Remove ' + emp.name + ' from the active roster? Their past attendance history stays in the Sheet.')) return;
+  state.employees = state.employees.filter(function (e) { return e.id !== id; });
+  state.tasks.forEach(function (t) { delete t.assignments[id]; });
+  delete state.completions[id];
+  renderAdmin();
+  renderEmployeeList();
+  renderStaff();
+}
+
+renderDate();
+renderStaff();
+</script>
+</body>
+</html>
