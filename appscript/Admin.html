@@ -1,17 +1,12 @@
-<!DOCTYPE html>
-<html>
-<head>
-<base target="_top">
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;700&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
-<?!= include('Stylesheet'); ?>
-</head>
-<body>
-<div class="wrap">
-
-  <h1>Cafe Tan90 — Admin</h1>
-  <p class="subtitle">Set today's tasks and who's doing them. "Present today" fills itself in from the staff page — you don't touch it here.</p>
+<!--
+  This file is a BODY-ONLY partial, pulled into Staff.html's "Admin" tab via
+  Apps Script's include() helper — it is not served on its own by doGet().
+  No html/head/body wrapper here on purpose; Staff.html already provides
+  those (and the Stylesheet include) once for the whole page. (Deliberately
+  not spelling out the include syntax itself in this comment — Apps Script's
+  template engine scans raw text for scriptlet tags even inside comments.)
+-->
+<p class="hint" style="margin:-6px 0 20px;">Set up tasks and who's doing them. "Present today" fills itself in from the staff page — you don't touch it here.</p>
 
   <div class="card lock-screen" id="admin-lock">
     <h2>Admin access</h2>
@@ -44,95 +39,489 @@
       <p class="hint" id="employee-status" style="margin-top:10px;"></p>
     </div>
 
-    <div class="card">
-      <h2>Today's tasks</h2>
-      <p class="hint">Add each task once, then tick who's doing it today.</p>
+    <div class="card" id="tasks-card">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">Tasks for <span id="editor-date-label">—</span></h2>
+        <div class="buttons" style="margin:0;">
+          <button class="btn ghost" onclick="editorPrevDay()">‹ Prev day</button>
+          <button class="btn ghost" onclick="editorGoToday()">Today</button>
+          <button class="btn ghost" onclick="editorNextDay()">Next day ›</button>
+          <input type="date" id="editor-date-input" onchange="loadEditorDateGuarded_(this.value)" class="task-name-input" style="width:auto;">
+        </div>
+      </div>
+      <p class="hint">Add each task once, then tick who's doing it. Use "Repeats" on a task to make it repeat automatically on chosen days of the week (e.g. "Make base milk" every Mon–Fri) — no need to re-add it each day. Jump to any date with the picker above, including anything planned ahead, to view, edit, or delete it — not just today. <b>Nothing here is saved until you click "Save tasks" below</b> — that one click also applies any Repeats changes you made.</p>
       <table>
         <thead id="admin-thead"></thead>
         <tbody id="admin-body"></tbody>
       </table>
       <div class="buttons">
         <button class="btn" onclick="addTaskRow()">+ Add task</button>
-        <button class="btn" onclick="copyYesterday()">Copy yesterday's tasks</button>
+        <button class="btn" onclick="copyPreviousDay()">Copy previous day's tasks</button>
         <button class="btn primary" onclick="saveTasks()">Save tasks</button>
       </div>
       <p class="hint" id="save-status" style="margin-top:10px;"></p>
     </div>
-  </div>
 
-  <footer><a href="?" target="_top">Back to staff view</a></footer>
-</div>
+    <div class="card">
+      <h2>Plan tasks ahead</h2>
+      <p class="hint">For one-off or short-run tasks — set one up once and apply it to a whole week or month at a time. Dates with a small dot already have tasks on them; <b>click any date to see what's on it</b> (or to jump there and edit). Tick dates below (or use the shortcuts), add who's doing it, then click "Add task to selected dates" — that click saves it immediately, there's no separate save step for this card.</p>
+
+      <div class="plan-calendar">
+        <div class="cal-nav">
+          <button type="button" class="btn ghost" onclick="calPrevMonth()">‹</button>
+          <span id="plan-calendar-label"></span>
+          <button type="button" class="btn ghost" onclick="calNextMonth()">›</button>
+        </div>
+        <div class="cal-grid" id="plan-calendar-grid"></div>
+      </div>
+
+      <div class="plan-preview" id="plan-preview" style="display:none;">
+        <div class="plan-preview-head">
+          <b id="plan-preview-date">—</b>
+          <button type="button" class="btn ghost btn-small" onclick="closePlanPreview()">✕</button>
+        </div>
+        <div id="plan-preview-body"></div>
+        <div class="buttons">
+          <button type="button" class="btn btn-small" onclick="jumpToEditFromPreview()">Edit this day in Tasks above ↑</button>
+        </div>
+      </div>
+
+      <div class="buttons" style="justify-content:center;">
+        <button class="btn" onclick="addPresetDates('today')">Today</button>
+        <button class="btn" onclick="addPresetDates('week')">Rest of this week</button>
+        <button class="btn" onclick="addPresetDates('7days')">Next 7 days</button>
+        <button class="btn" onclick="addPresetDates('month')">Rest of this month</button>
+        <button class="btn ghost" onclick="clearPlanDates()">Clear dates</button>
+      </div>
+      <p class="hint" id="plan-selected-count" style="margin-top:8px; text-align:center;">0 dates selected</p>
+
+      <input type="text" id="plan-task-name" class="task-name-input" placeholder="Task name" style="margin-top:14px;">
+      <div class="plan-assignments" id="plan-assignments"></div>
+
+      <div class="buttons">
+        <button class="btn primary" onclick="submitPlanTask()">Add task to selected dates</button>
+      </div>
+      <p class="hint" id="plan-status" style="margin-top:10px;"></p>
+    </div>
+  </div>
 
 <script>
 var pin = null;
 var EMPLOYEES = []; // [{id, name}, ...] — active employees only
 var tasks = [];
+var currentEditorDate = null; // 'yyyy-MM-dd' — whichever date the "Tasks for" editor is showing
 
 function unlockAdmin() {
   var val = document.getElementById('pin-input').value;
   google.script.run.withSuccessHandler(function (data) {
     pin = val;
-    EMPLOYEES = data.employees;
-    tasks = data.tasks;
+    applyAdminData_(data);
     document.getElementById('admin-lock').style.display = 'none';
     document.getElementById('admin-panel').style.display = 'block';
-    renderAdmin();
     renderEmployeeList();
+    renderCalendar();
+    renderPlanAssignments();
+    loadMonthOverview_(calendarMonthIso_());
   }).withFailureHandler(function () {
     alert('Wrong PIN.');
   }).getAdminData(val);
 }
 
+var tasksDirty = false; // true once the task list below has unsaved edits
+var openRepeatEditorIndex = -1; // which task row's "Repeats" editor is open, if any
+
+// Client-only fields added to each task returned from the server: repeatDays
+// (the day-of-week set the admin currently wants — starts as a copy of
+// t.standing.days, or [] for a one-time task) is what the Repeats editor
+// below actually edits; t.standing (server-reported) is left untouched until
+// Save so we can diff "what changed" at save time.
+function prepTasksClientState_(list) {
+  list.forEach(function (t) { t.repeatDays = t.standing ? t.standing.days.slice() : []; t._loadedName = t.name; });
+  return list;
+}
+
+function applyAdminData_(data) {
+  EMPLOYEES = data.employees;
+  tasks = prepTasksClientState_(data.tasks);
+  currentEditorDate = data.date;
+  tasksDirty = false;
+  openRepeatEditorIndex = -1;
+  document.getElementById('editor-date-label').textContent = data.dateLabel + (data.isToday ? ' (today)' : '');
+  document.getElementById('editor-date-input').value = data.date;
+  renderAdmin();
+}
+
 // ---- Task assignment table (tasks as rows, employees as columns) ----
+
+var STANDING_DAYS = [
+  { v: 1, l: 'Mon' }, { v: 2, l: 'Tue' }, { v: 3, l: 'Wed' }, { v: 4, l: 'Thu' },
+  { v: 5, l: 'Fri' }, { v: 6, l: 'Sat' }, { v: 0, l: 'Sun' }
+];
+
+function repeatsChipLabel_(days) {
+  if (!days || !days.length) return 'One-time';
+  if (days.length === 7) return '🔁 Daily';
+  var sorted = days.slice().sort();
+  if (sorted.join(',') === '1,2,3,4,5') return '🔁 Weekdays';
+  var labels = STANDING_DAYS.filter(function (d) { return days.indexOf(d.v) !== -1; }).map(function (d) { return d.l; });
+  return '🔁 ' + labels.join(', ');
+}
 
 function renderAdmin() {
   var thead = document.getElementById('admin-thead');
-  thead.innerHTML = '<tr><th>Task</th>' + EMPLOYEES.map(function (e) { return '<th class="task-col">' + e.name + '</th>'; }).join('') + '<th></th></tr>';
+  thead.innerHTML = '<tr><th>Task</th><th>Repeats</th>' + EMPLOYEES.map(function (e) { return '<th class="task-col">' + e.name + '</th>'; }).join('') + '<th></th></tr>';
   var body = document.getElementById('admin-body');
   body.innerHTML = '';
+  var totalCols = EMPLOYEES.length + 3;
+
   tasks.forEach(function (t, ti) {
     var tr = document.createElement('tr');
     var checks = EMPLOYEES.map(function (emp) {
       var checked = t.assignments[emp.id] ? 'checked' : '';
       return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + emp.id + '\',this.checked)"></td>';
     }).join('');
+    var chipCls = 'repeat-chip' + (t.repeatDays && t.repeatDays.length ? ' active' : '');
     tr.innerHTML =
       '<td><input type="text" class="task-name-input" value="' + t.name + '" onchange="renameTask(' + ti + ',this.value)"></td>' +
+      '<td><button type="button" class="' + chipCls + '" onclick="toggleRepeatEditor(' + ti + ')">' + repeatsChipLabel_(t.repeatDays) + '</button></td>' +
       checks +
       '<td><button class="btn ghost" onclick="removeTask(' + ti + ')">✕</button></td>';
     body.appendChild(tr);
+
+    if (openRepeatEditorIndex === ti) {
+      var editorTr = document.createElement('tr');
+      editorTr.className = 'repeat-editor-row';
+      var dayBoxes = STANDING_DAYS.map(function (d) {
+        var checked = t.repeatDays.indexOf(d.v) !== -1 ? 'checked' : '';
+        return '<label class="plan-check"><input type="checkbox" ' + checked +
+          ' onchange="toggleRepeatDay(' + ti + ',' + d.v + ',this.checked)"> ' + d.l + '</label>';
+      }).join('');
+      editorTr.innerHTML = '<td colspan="' + totalCols + '"><div class="repeat-editor">' +
+        '<p class="hint" style="margin:0 0 8px;">Repeats on:</p>' +
+        '<div class="plan-assignments">' + dayBoxes + '</div>' +
+        '<div class="buttons" style="margin-top:10px;">' +
+        '<button type="button" class="btn ghost" onclick="clearRepeatDays(' + ti + ')">Make one-time</button>' +
+        '<button type="button" class="btn primary" onclick="closeRepeatEditor()">Done</button>' +
+        '</div>' +
+        '<p class="hint" style="margin-top:6px;">Applies when you click "Save tasks" below.</p>' +
+        '</div></td>';
+      body.appendChild(editorTr);
+    }
   });
 }
 
-function toggleAssign(ti, empId, val) { tasks[ti].assignments[empId] = val; }
-function renameTask(ti, val) { tasks[ti].name = val; }
-function removeTask(ti) { tasks.splice(ti, 1); renderAdmin(); }
+function toggleAssign(ti, empId, val) { tasks[ti].assignments[empId] = val; tasksDirty = true; }
+function renameTask(ti, val) { tasks[ti].name = val; tasksDirty = true; }
+function removeTask(ti) { tasks.splice(ti, 1); openRepeatEditorIndex = -1; tasksDirty = true; renderAdmin(); }
+
+function toggleRepeatEditor(ti) {
+  openRepeatEditorIndex = (openRepeatEditorIndex === ti) ? -1 : ti;
+  renderAdmin();
+}
+function closeRepeatEditor() { openRepeatEditorIndex = -1; renderAdmin(); }
+
+function toggleRepeatDay(ti, day, checked) {
+  var days = tasks[ti].repeatDays || [];
+  var idx = days.indexOf(day);
+  if (checked && idx === -1) days.push(day);
+  if (!checked && idx !== -1) days.splice(idx, 1);
+  tasks[ti].repeatDays = days;
+  tasksDirty = true;
+  renderAdmin();
+}
+
+function clearRepeatDays(ti) {
+  tasks[ti].repeatDays = [];
+  tasksDirty = true;
+  openRepeatEditorIndex = -1;
+  renderAdmin();
+}
 
 function addTaskRow() {
   if (tasks.length >= 8) { alert('Max 8 tasks per day.'); return; }
   var blank = {};
   EMPLOYEES.forEach(function (e) { blank[e.id] = false; });
-  tasks.push({ name: 'New task', assignments: blank });
+  tasks.push({ name: 'New task', assignments: blank, standing: null, repeatDays: [] });
+  tasksDirty = true;
   renderAdmin();
 }
 
-function copyYesterday() {
+function copyPreviousDay() {
   google.script.run.withSuccessHandler(function (data) {
-    tasks = data.tasks;
+    tasks = prepTasksClientState_(data.tasks);
+    openRepeatEditorIndex = -1;
+    tasksDirty = true;
     renderAdmin();
-    document.getElementById('save-status').textContent = 'Copied yesterday\'s tasks — click Save tasks to apply.';
-  }).withFailureHandler(function () { alert('Could not copy yesterday\'s tasks.'); }).copyYesterdayTasks(pin);
+    document.getElementById('save-status').textContent = 'Copied from the previous day — click Save tasks to apply.';
+  }).withFailureHandler(function () { alert('Could not copy.'); }).copyPreviousDayTasks(pin, currentEditorDate);
+}
+
+// Diffs each row's chosen repeatDays against what the server told us this
+// task's standing rule was at load time, and turns the differences into a
+// short queue of saveStandingTask/removeStandingTask calls — this is what
+// lets "Repeats" live inside the same single Save click as everything else.
+function computeStandingChanges_() {
+  var changes = [];
+  tasks.forEach(function (t) {
+    var origId = t.standing ? t.standing.id : null;
+    var origDays = t.standing ? t.standing.days.slice().sort().join(',') : '';
+    var newDays = (t.repeatDays || []).slice().sort().join(',');
+    var nameChanged = origId && t._loadedName !== t.name;
+    if (!origId && newDays) {
+      changes.push({ action: 'create', name: t.name, days: t.repeatDays.slice(), assignments: copyObj_(t.assignments) });
+    } else if (origId && !newDays) {
+      changes.push({ action: 'remove', id: origId });
+    } else if (origId && newDays && (newDays !== origDays || nameChanged)) {
+      // Also fires on a plain rename (days unchanged) — keeps the standing
+      // rule's own name in sync so future days seed under the new name too,
+      // instead of silently forking into two differently-named tasks.
+      changes.push({ action: 'update', id: origId, name: t.name, days: t.repeatDays.slice(), assignments: copyObj_(t.assignments) });
+    }
+  });
+  return changes;
+}
+
+function copyObj_(o) { var r = {}; for (var k in o) r[k] = o[k]; return r; }
+
+function runQueue_(thunks, onDone, onError) {
+  var i = 0;
+  function next() {
+    if (i >= thunks.length) { onDone(); return; }
+    thunks[i++](next, onError);
+  }
+  next();
 }
 
 function saveTasks() {
-  document.getElementById('save-status').textContent = 'Saving…';
+  var changes = computeStandingChanges_();
+  var thunks = changes.map(function (c) {
+    return function (next, onError) {
+      if (c.action === 'remove') {
+        google.script.run.withSuccessHandler(function () { next(); }).withFailureHandler(onError).removeStandingTask(pin, c.id);
+      } else if (c.action === 'create') {
+        google.script.run.withSuccessHandler(function () { next(); }).withFailureHandler(onError)
+          .saveStandingTask(pin, { name: c.name, days: c.days, assignments: c.assignments });
+      } else {
+        google.script.run.withSuccessHandler(function () { next(); }).withFailureHandler(onError)
+          .saveStandingTask(pin, { id: c.id, name: c.name, days: c.days, assignments: c.assignments });
+      }
+    };
+  });
+
+  document.getElementById('save-status').textContent = changes.length ? 'Saving repeat settings…' : 'Saving…';
+  runQueue_(thunks, function () {
+    document.getElementById('save-status').textContent = 'Saving…';
+    google.script.run.withSuccessHandler(function (data) {
+      applyAdminData_(data);
+      document.getElementById('save-status').textContent = 'Saved to ' + data.dateLabel + '.';
+      syncCalendarAfterTaskChange_();
+    }).withFailureHandler(function () {
+      document.getElementById('save-status').textContent = 'Could not save — try again.';
+    }).saveTasks(pin, currentEditorDate, tasks);
+  }, function (e) {
+    document.getElementById('save-status').textContent = 'Could not save repeat settings — ' + (e && e.message ? e.message : 'try again.');
+  });
+}
+
+// ---- "Tasks for [date]" navigator — lets the editor above point at any day ----
+
+function loadEditorDate(iso) {
+  document.getElementById('save-status').textContent = 'Loading…';
   google.script.run.withSuccessHandler(function (data) {
-    tasks = data.tasks;
-    renderAdmin();
-    document.getElementById('save-status').textContent = 'Saved to today\'s sheet.';
+    applyAdminData_(data);
+    document.getElementById('save-status').textContent = '';
   }).withFailureHandler(function () {
-    document.getElementById('save-status').textContent = 'Could not save — try again.';
-  }).saveTasks(pin, tasks);
+    document.getElementById('save-status').textContent = 'Could not load that day — try again.';
+  }).getAdminData(pin, iso);
+}
+
+// Confirms before navigating away if there are unsaved edits on the current
+// date, so switching dates can never silently throw away work-in-progress.
+function loadEditorDateGuarded_(iso) {
+  if (tasksDirty && !confirm('You have unsaved changes to "Tasks for ' + document.getElementById('editor-date-label').textContent + '". Switch dates and lose them?')) {
+    document.getElementById('editor-date-input').value = currentEditorDate; // revert the picker if it already changed
+    return;
+  }
+  loadEditorDate(iso);
+}
+
+function editorPrevDay() { loadEditorDateGuarded_(shiftIso_(currentEditorDate, -1)); }
+function editorNextDay() { loadEditorDateGuarded_(shiftIso_(currentEditorDate, 1)); }
+function editorGoToday() { loadEditorDateGuarded_(ymd_(startOfDay_(new Date()))); }
+
+function shiftIso_(iso, delta) {
+  var parts = iso.split('-').map(Number);
+  var d = new Date(parts[0], parts[1] - 1, parts[2]);
+  d.setDate(d.getDate() + delta);
+  return ymd_(d);
+}
+
+// ---- Plan tasks ahead (calendar multi-select + task builder + preview) ----
+
+var planSelectedDates = {}; // { 'yyyy-MM-dd': true, ... } — using an object so it survives across renders easily
+var planAssignments = {};   // { employeeId: bool } — for the task currently being built
+var planCalendarMonth = new Date();
+planCalendarMonth.setDate(1);
+var monthTaskCounts = {};   // { 'yyyy-MM-dd': count, ... } — which dates in the displayed month already have tasks
+var previewDate = null;     // 'yyyy-MM-dd' currently shown in the preview panel, if any
+
+function pad2_(n) { return n < 10 ? '0' + n : '' + n; }
+function ymd_(d) { return d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate()); }
+function startOfDay_(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+function calendarMonthIso_() { return planCalendarMonth.getFullYear() + '-' + pad2_(planCalendarMonth.getMonth() + 1); }
+
+function loadMonthOverview_(monthIso) {
+  google.script.run.withSuccessHandler(function (map) {
+    monthTaskCounts = map || {};
+    renderCalendar();
+  }).withFailureHandler(function () { /* dots are a nice-to-have — fail quietly */ }).getTasksOverviewForMonth(pin, monthIso);
+}
+
+function renderCalendar() {
+  var grid = document.getElementById('plan-calendar-grid');
+  var label = document.getElementById('plan-calendar-label');
+  var today = startOfDay_(new Date());
+  var first = new Date(planCalendarMonth.getFullYear(), planCalendarMonth.getMonth(), 1);
+  label.textContent = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+
+  var startWeekday = first.getDay();
+  var daysInMo = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+
+  var html = '';
+  ['S', 'M', 'T', 'W', 'T', 'F', 'S'].forEach(function (d) { html += '<div class="cal-dow">' + d + '</div>'; });
+  for (var i = 0; i < startWeekday; i++) html += '<div class="cal-cell empty"></div>';
+  for (var day = 1; day <= daysInMo; day++) {
+    var d = new Date(first.getFullYear(), first.getMonth(), day);
+    var iso = ymd_(d);
+    var isPast = d < today;
+    var isToday = iso === ymd_(today);
+    var isSelected = !!planSelectedDates[iso];
+    var hasTasks = !!monthTaskCounts[iso];
+    var cls = 'cal-cell' + (isPast ? ' past' : '') + (isSelected ? ' selected' : '') + (isToday ? ' today' : '') + (hasTasks ? ' has-tasks' : '');
+    var handler = isPast ? 'previewCalDate(\'' + iso + '\')' : 'toggleCalDate(\'' + iso + '\')';
+    html += '<div class="' + cls + '" onclick="' + handler + '">' + day + '</div>';
+  }
+  grid.innerHTML = html;
+
+  var count = Object.keys(planSelectedDates).length;
+  document.getElementById('plan-selected-count').textContent = count + (count === 1 ? ' date' : ' dates') + ' selected';
+}
+
+function toggleCalDate(iso) {
+  if (planSelectedDates[iso]) delete planSelectedDates[iso]; else planSelectedDates[iso] = true;
+  renderCalendar();
+  previewCalDate(iso);
+}
+
+function previewCalDate(iso) {
+  previewDate = iso;
+  var panel = document.getElementById('plan-preview');
+  panel.style.display = 'block';
+  document.getElementById('plan-preview-date').textContent = iso;
+  document.getElementById('plan-preview-body').innerHTML = '<p class="hint">Loading…</p>';
+  google.script.run.withSuccessHandler(function (data) {
+    if (previewDate !== iso) return; // a newer click has already moved on
+    renderPlanPreview_(data);
+  }).withFailureHandler(function () {
+    document.getElementById('plan-preview-body').innerHTML = '<p class="hint">Could not load that date.</p>';
+  }).getAdminData(pin, iso);
+}
+
+function renderPlanPreview_(data) {
+  document.getElementById('plan-preview-date').textContent = data.dateLabel + (data.isToday ? ' (today)' : '');
+  var empMap = {};
+  data.employees.forEach(function (e) { empMap[e.id] = e.name; });
+  if (!data.tasks.length) {
+    document.getElementById('plan-preview-body').innerHTML = '<p class="hint">No tasks on this day yet.</p>';
+    return;
+  }
+  var rows = data.tasks.map(function (t) {
+    var names = Object.keys(t.assignments).filter(function (id) { return t.assignments[id]; })
+      .map(function (id) { return empMap[id] || '?'; }).join(', ') || 'Unassigned';
+    var chip = t.standing ? '🔁 ' : '';
+    return '<div class="preview-task">' + chip + '<b>' + t.name + '</b> · ' + names + '</div>';
+  }).join('');
+  document.getElementById('plan-preview-body').innerHTML = rows;
+}
+
+function closePlanPreview() {
+  document.getElementById('plan-preview').style.display = 'none';
+  previewDate = null;
+}
+
+function jumpToEditFromPreview() {
+  if (!previewDate) return;
+  loadEditorDateGuarded_(previewDate);
+  var card = document.getElementById('tasks-card');
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// After anything that changes a specific day's tasks (Save tasks,
+// copy-previous-day, plan-ahead), the calendar's dots and any open preview
+// can go stale — this keeps them honest without a full page reload.
+function syncCalendarAfterTaskChange_() {
+  loadMonthOverview_(calendarMonthIso_());
+  if (previewDate) previewCalDate(previewDate);
+}
+
+function calPrevMonth() { planCalendarMonth.setMonth(planCalendarMonth.getMonth() - 1); renderCalendar(); loadMonthOverview_(calendarMonthIso_()); }
+function calNextMonth() { planCalendarMonth.setMonth(planCalendarMonth.getMonth() + 1); renderCalendar(); loadMonthOverview_(calendarMonthIso_()); }
+
+function addPresetDates(preset) {
+  var today = startOfDay_(new Date());
+  var dates = [];
+  if (preset === 'today') {
+    dates = [today];
+  } else if (preset === 'week') {
+    var d = new Date(today);
+    while (true) {
+      dates.push(new Date(d));
+      if (d.getDay() === 0) break; // stop after Sunday
+      d.setDate(d.getDate() + 1);
+    }
+  } else if (preset === '7days') {
+    for (var i = 0; i < 7; i++) { var d2 = new Date(today); d2.setDate(d2.getDate() + i); dates.push(d2); }
+  } else if (preset === 'month') {
+    var d3 = new Date(today);
+    var end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    while (d3 <= end) { dates.push(new Date(d3)); d3.setDate(d3.getDate() + 1); }
+  }
+  dates.forEach(function (d) { planSelectedDates[ymd_(d)] = true; });
+  renderCalendar();
+}
+
+function clearPlanDates() { planSelectedDates = {}; renderCalendar(); }
+
+function renderPlanAssignments() {
+  var wrap = document.getElementById('plan-assignments');
+  wrap.innerHTML = EMPLOYEES.map(function (e) {
+    var checked = planAssignments[e.id] ? 'checked' : '';
+    return '<label class="plan-check"><input type="checkbox" ' + checked +
+      ' onchange="planAssignments[\'' + e.id + '\']=this.checked"> ' + e.name + '</label>';
+  }).join('');
+}
+
+function submitPlanTask() {
+  var name = document.getElementById('plan-task-name').value.trim();
+  var dates = Object.keys(planSelectedDates);
+  if (!name) { alert('Enter a task name.'); return; }
+  if (!dates.length) { alert('Pick at least one date on the calendar.'); return; }
+
+  document.getElementById('plan-status').textContent = 'Adding…';
+  google.script.run.withSuccessHandler(function (result) {
+    var msg = 'Added to ' + result.applied.length + ' day' + (result.applied.length === 1 ? '' : 's') + '. Already saved — click any of those dates above to check it.';
+    if (result.skipped.length) msg += ' ' + result.skipped.length + ' day(s) already had 8 tasks and were skipped.';
+    document.getElementById('plan-status').textContent = msg;
+    document.getElementById('plan-task-name').value = '';
+    planAssignments = {};
+    renderPlanAssignments();
+    syncCalendarAfterTaskChange_();
+    // If the editor above is already looking at one of the planned dates,
+    // refresh it so it reflects the change right away.
+    if (result.applied.indexOf(currentEditorDate) !== -1) loadEditorDate(currentEditorDate);
+  }).withFailureHandler(function (e) {
+    document.getElementById('plan-status').textContent = 'Could not save — ' + (e && e.message ? e.message : 'try again.');
+  }).planTask(pin, name, planAssignments, dates);
 }
 
 function openSheet() {
@@ -177,6 +566,7 @@ function addEmployeeFlow() {
     });
     renderAdmin();
     renderEmployeeList();
+    renderPlanAssignments();
     document.getElementById('employee-status').textContent = 'Added ' + result.name + '.';
   }).withFailureHandler(function (e) {
     document.getElementById('employee-status').textContent = 'Could not add — ' + (e && e.message ? e.message : 'try again.');
@@ -189,6 +579,7 @@ function renameEmployeeFlow(id, newName) {
     EMPLOYEES = result.employees;
     renderAdmin();
     renderEmployeeList();
+    renderPlanAssignments();
     document.getElementById('employee-status').textContent = 'Saved.';
   }).withFailureHandler(function () {
     document.getElementById('employee-status').textContent = 'Could not rename — try again.';
@@ -201,13 +592,13 @@ function removeEmployeeFlow(id, name) {
   document.getElementById('employee-status').textContent = 'Removing…';
   google.script.run.withSuccessHandler(function (result) {
     EMPLOYEES = result.employees;
+    delete planAssignments[id];
     renderAdmin();
     renderEmployeeList();
+    renderPlanAssignments();
     document.getElementById('employee-status').textContent = 'Removed ' + name + '.';
   }).withFailureHandler(function () {
     document.getElementById('employee-status').textContent = 'Could not remove — try again.';
   }).removeEmployee(pin, id);
 }
 </script>
-</body>
-</html>

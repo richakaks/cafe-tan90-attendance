@@ -10,36 +10,66 @@
 <body>
 <div class="wrap">
 
-  <h1>Cafe Tan90 — Attendance</h1>
-  <p class="subtitle">Tap your name's button when you arrive, and again when you leave.</p>
+  <h1>Cafe Tan90</h1>
+  <p class="subtitle">Attendance and tasks for Miw, Nureen, and Richa.</p>
 
-  <div class="card">
-    <div class="date-banner">
-      <span class="day" id="today-day">—</span>
-      <span class="date" id="today-date">—</span>
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-staff" onclick="showView('staff')">Staff view</button>
+    <button class="tab-btn" id="tab-admin" onclick="showView('admin')">Admin view</button>
+  </div>
+
+  <!-- STAFF VIEW -->
+  <div class="view active" id="view-staff">
+
+    <div class="card">
+      <div class="date-banner">
+        <span class="day" id="today-day">—</span>
+        <span class="date" id="today-date">—</span>
+      </div>
+      <p class="hint">Times are logged to the second, straight into today's Google Sheet.</p>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th></tr>
+        </thead>
+        <tbody id="attendance-body"></tbody>
+      </table>
     </div>
-    <p class="hint">Times are logged to the second, straight into today's Google Sheet.</p>
-    <table>
-      <thead>
-        <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th></tr>
-      </thead>
-      <tbody id="attendance-body"></tbody>
-    </table>
+
+    <div class="card task-table-wrap">
+      <h2>Today's tasks</h2>
+      <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in — tap "Mark done" as each task gets finished.</p>
+      <table>
+        <thead id="task-thead"></thead>
+        <tbody id="task-body"></tbody>
+      </table>
+    </div>
+
   </div>
 
-  <div class="card task-table-wrap">
-    <h2>Today's tasks</h2>
-    <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in — tap "Mark done" as each task gets finished.</p>
-    <table>
-      <thead id="task-thead"></thead>
-      <tbody id="task-body"></tbody>
-    </table>
+  <!-- ADMIN VIEW — pulled in from Admin.html, a body-only partial -->
+  <div class="view" id="view-admin">
+    <?!= include('Admin'); ?>
   </div>
 
-  <footer>Times shown in Asia/Bangkok time. <a href="?page=admin" target="_top">Admin page</a></footer>
+  <footer>Times shown in Asia/Bangkok time.</footer>
 </div>
 
 <script>
+// Switches the visible tab. Everything on the Admin tab still requires the
+// PIN — this only toggles which card is showing, it doesn't unlock anything.
+function showView(name) {
+  document.getElementById('view-staff').classList.toggle('active', name === 'staff');
+  document.getElementById('view-admin').classList.toggle('active', name === 'admin');
+  document.getElementById('tab-staff').classList.toggle('active', name === 'staff');
+  document.getElementById('tab-admin').classList.toggle('active', name === 'admin');
+}
+// Optional deep link: opening the URL with ?page=admin pre-selects the
+// Admin tab on load (handy for an admin-only bookmark), without exposing
+// any separate URL that needs to be typed — the tab above works either way.
+(function () {
+  if (new URLSearchParams(window.location.search).get('page') === 'admin') showView('admin');
+})();
+
 var lastData = null;
 var busy = false;
 

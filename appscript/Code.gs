@@ -32,6 +32,8 @@ var DRIVE_FOLDER_NAME = 'Cafe Tan90 Attendance Sheets';
 var MAX_TASK_COLUMNS = 8;  // task columns C..J on the day tab
 var MAX_EMPLOYEES = 8;     // employee row-slots per table on the day tab
 var EMPLOYEES_PROP_KEY = 'EMPLOYEES_V1';
+var STANDING_TASKS_PROP_KEY = 'STANDING_TASKS_V1';
+var MAX_STANDING_TASKS = 6; // recurring tasks share the same 8 task columns as one-off/planned tasks
 
 // Change this once you deploy (or set an Admin PIN via
 // Project Settings > Script Properties > ADMIN_PIN so you don't have to edit code).
@@ -54,9 +56,13 @@ var TABLE3_END_ROW = TABLE3_START_ROW + MAX_EMPLOYEES - 1;
 
 // ---- Web app entry point ----------------------------------------------
 
+// Always serves the same page — Staff.html is now a single page with
+// Staff/Admin as tabs (Admin.html is pulled in as a body-only partial via
+// include(), not served on its own). The optional ?page=admin query string
+// still works as a deep link that pre-selects the Admin tab on load (see
+// Staff.html's inline script) — it's just no longer a different template.
 function doGet(e) {
-  var page = (e && e.parameter && e.parameter.page === 'admin') ? 'Admin' : 'Staff';
-  var tmpl = HtmlService.createTemplateFromFile(page);
+  var tmpl = HtmlService.createTemplateFromFile('Staff');
   return tmpl.evaluate()
     .setTitle('Cafe Tan90 Attendance')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
@@ -108,6 +114,89 @@ function getActiveEmployeesWithIndex_() {
     if (s.active) result.push({ id: s.id, name: s.name, idx: i });
   });
   return result;
+}
+
+// ---- Standing (recurring) tasks -----------------------------------------
+// A standing task is a task that repeats automatically on chosen days of the
+// week — e.g. "Make base milk" every Mon-Fri — with no admin action needed
+// once it's set up. { id, name, days: [0=Sun..6=Sat, ...], assignments:
+// { employeeId: bool }, active }. Stored the same way as the employee roster
+// (Script Properties), so it survives redeploys.
+
+function getAllStandingTasks_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(STANDING_TASKS_PROP_KEY);
+  if (!raw) return [];
+  try {
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveStandingTasksList_(list) {
+  PropertiesService.getScriptProperties().setProperty(STANDING_TASKS_PROP_KEY, JSON.stringify(list));
+}
+
+function getActiveStandingTasksForWeekday_(weekday) {
+  return getAllStandingTasks_().filter(function (t) {
+    return t.active && t.days && t.days.indexOf(weekday) !== -1;
+  });
+}
+
+// Idempotent: fills in any standing task that applies to this date's weekday
+// and isn't already on the sheet by name. Never overwrites a task that's
+// already there (whether it was seeded earlier or hand-edited for this one
+// day), so a per-day tweak never gets clobbered by a later resync.
+function applyStandingTasksToSheet_(sheet, date) {
+  var standing = getActiveStandingTasksForWeekday_(date.getDay());
+  if (!standing.length) return;
+
+  var slots = getAllEmployeeSlots_();
+  var headerRow = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
+  var changed = false;
+
+  standing.forEach(function (st) {
+    var exists = headerRow.some(function (h) { return h && String(h).trim().toLowerCase() === st.name.toLowerCase(); });
+    if (exists) return;
+
+    var col = -1;
+    for (var c = 0; c < MAX_TASK_COLUMNS; c++) { if (!headerRow[c]) { col = c; break; } }
+    if (col === -1) return; // day already has 8 tasks — best-effort, silently skipped
+
+    headerRow[col] = st.name;
+    changed = true;
+    var colValues = [];
+    for (var r = 0; r < MAX_EMPLOYEES; r++) {
+      colValues.push([!!(st.assignments && st.assignments[slots[r].id])]);
+    }
+    sheet.getRange(TABLE2_START_ROW, 3 + col, MAX_EMPLOYEES, 1).setValues(colValues);
+  });
+
+  if (changed) {
+    sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
+    sheet.getRange(TABLE3_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
+  }
+}
+
+// After a standing task is added or edited, push it onto today's tab and
+// every remaining tab this month that doesn't already have it — same
+// "rest of the month, not the past" scope as syncEmployeeNamesForRestOfMonth_.
+// Future months pick it up automatically the first time they're built,
+// since ensureDaySheet() seeds standing tasks into every brand-new tab.
+function resyncStandingTasksForRestOfMonth_() {
+  var now = new Date();
+  var monthStart = getMonthStart(now);
+  var ss = getOrCreateMonthSpreadsheet(monthStart);
+  var total = daysInMonth(monthStart);
+  var todayDay = now.getDate();
+
+  for (var day = todayDay; day <= total; day++) {
+    var d = new Date(monthStart);
+    d.setDate(d.getDate() + (day - 1));
+    var sheet = ensureDaySheet(ss, d);
+    applyStandingTasksToSheet_(sheet, d);
+  }
 }
 
 // ---- Date / spreadsheet helpers ---------------------------------------
@@ -200,6 +289,11 @@ function ensureDaySheet(ss, date) {
   sheet.setColumnWidth(1, 110);
   sheet.setColumnWidths(2, 3, 110);
   for (var c = 3; c <= 2 + MAX_TASK_COLUMNS; c++) sheet.setColumnWidth(c, 130);
+
+  // Seed any standing (recurring) tasks that apply to this day of the week —
+  // this is what makes "Make base milk every weekday" show up on a brand-new
+  // day tab with zero admin action.
+  applyStandingTasksToSheet_(sheet, date);
 
   return sheet;
 }
@@ -364,33 +458,89 @@ function getSheetUrl(pin) {
   return ss.getUrl() + '#gid=' + sheet.getSheetId();
 }
 
-function getAdminData(pin) {
+// dateStr: optional 'yyyy-MM-dd' — defaults to today. This is what powers
+// the "Tasks for [date]" navigator on the admin page: the same editor, just
+// pointed at whichever day you're checking or planning.
+function getAdminData(pin, dateStr) {
   assertPin_(pin);
-  var sheet = getTodaySheet();
+  var date = dateStr ? parseDateStr_(dateStr) : new Date();
+  var sheet = getSheetForDate(date);
   var activeEmployees = getActiveEmployeesWithIndex_();
   var taskHeaders = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
   var taskGrid = sheet.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).getValues();
+
+  // Match each of this day's task columns against the active standing-task
+  // list by name (same case-insensitive match applyStandingTasksToSheet_
+  // uses to seed idempotently), so the admin UI can show a single unified
+  // task list with a "Repeats" chip instead of a separate standing-tasks
+  // card. A task only counts as "standing" here if it repeats on this
+  // date's own weekday — if it's linked to a standing rule that doesn't
+  // include today, it's shown as one-time-for-this-day (the recurring copy
+  // lives on its own days).
+  var weekday = date.getDay();
+  var standingByName = {};
+  getAllStandingTasks_().forEach(function (t) {
+    if (t.active && t.days && t.days.indexOf(weekday) !== -1) {
+      standingByName[t.name.trim().toLowerCase()] = t;
+    }
+  });
 
   var tasks = [];
   for (var c = 0; c < MAX_TASK_COLUMNS; c++) {
     if (!taskHeaders[c]) continue;
     var assignments = {};
     activeEmployees.forEach(function (emp) { assignments[emp.id] = !!taskGrid[emp.idx][c]; });
-    tasks.push({ name: taskHeaders[c], assignments: assignments });
+    var match = standingByName[String(taskHeaders[c]).trim().toLowerCase()];
+    tasks.push({
+      name: taskHeaders[c],
+      assignments: assignments,
+      standing: match ? { id: match.id, days: match.days } : null
+    });
   }
+  var todayIso = ymdFromDate_(new Date());
+  var thisIso = ymdFromDate_(date);
   return {
+    date: thisIso,
+    dateLabel: Utilities.formatDate(date, TIMEZONE, 'EEEE, MMMM d, yyyy'),
+    isToday: thisIso === todayIso,
     tasks: tasks,
     employees: activeEmployees.map(function (e) { return { id: e.id, name: e.name }; })
   };
 }
 
+// Lightweight month overview for the Plan-ahead calendar: which dates in
+// `monthIso` ('yyyy-MM') already have at least one task, and how many —
+// just enough to draw a dot per date without pulling full task detail for
+// every day. Building/reading a month you haven't touched yet takes a beat
+// (same one-time cost as any first use of a month — see getOrCreateMonthSpreadsheet).
+function getTasksOverviewForMonth(pin, monthIso) {
+  assertPin_(pin);
+  var parts = String(monthIso).split('-');
+  var monthStart = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+  var ss = getOrCreateMonthSpreadsheet(monthStart);
+  var total = daysInMonth(monthStart);
+
+  var byDate = {};
+  for (var day = 1; day <= total; day++) {
+    var d = new Date(monthStart);
+    d.setDate(d.getDate() + (day - 1));
+    var sheet = ensureDaySheet(ss, d);
+    var headerRow = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
+    var count = headerRow.filter(function (h) { return !!h; }).length;
+    if (count > 0) byDate[ymdFromDate_(d)] = count;
+  }
+  return byDate;
+}
+
 // tasks: [{ name: string, assignments: { employeeId: bool, ... } }, ...] (max MAX_TASK_COLUMNS)
-function saveTasks(pin, tasks) {
+// dateStr: optional 'yyyy-MM-dd' — defaults to today.
+function saveTasks(pin, dateStr, tasks) {
   assertPin_(pin);
   if (tasks.length > MAX_TASK_COLUMNS) {
     throw new Error('Max ' + MAX_TASK_COLUMNS + ' tasks per day.');
   }
-  var sheet = getTodaySheet();
+  var date = dateStr ? parseDateStr_(dateStr) : new Date();
+  var sheet = getSheetForDate(date);
   var slots = getAllEmployeeSlots_();
 
   var headerRow = [];
@@ -413,26 +563,105 @@ function saveTasks(pin, tasks) {
   }
   sheet.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).setValues(gridValues);
 
-  return getAdminData(pin);
+  return getAdminData(pin, dateStr);
 }
 
-function copyYesterdayTasks(pin) {
+// Applies one task (with its assignments) to every date in `dates`, so the
+// admin can plan a task across a week or a month in one go instead of
+// re-entering it on each day's tab. Each date is handled independently:
+// - If that day already has a task with the same name (from a previous plan,
+//   or "Copy yesterday's tasks", or manual entry), the assignments are
+//   merged in (OR'd together) onto the existing column instead of creating a
+//   duplicate.
+// - Otherwise the task is added to that day's first free task column.
+// - A day that already has MAX_TASK_COLUMNS tasks and no matching name is
+//   skipped (reported back so the admin can see it happened).
+// dates: array of 'yyyy-MM-dd' strings (interpreted in TIMEZONE).
+// assignments: { employeeId: bool, ... }
+function planTask(pin, name, assignments, dates) {
   assertPin_(pin);
-  var yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  var ySheet = getSheetForDate(yesterday);
+  name = (name || '').trim();
+  if (!name) throw new Error('Enter a task name.');
+  if (!dates || !dates.length) throw new Error('Pick at least one date.');
+  if (dates.length > 62) throw new Error('That\'s a lot of dates at once — try a smaller range.');
 
-  var headerRow = ySheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
-  var grid = ySheet.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).getValues();
+  var slots = getAllEmployeeSlots_();
+  var applied = [];
+  var skipped = [];
 
-  var today = getTodaySheet();
-  today.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
-  today.getRange(TABLE3_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
-  today.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).setValues(grid);
-  // Note: completion times are deliberately NOT copied — a fresh day starts
-  // with nothing marked done, even if the same tasks are reused.
+  dates.forEach(function (dateStr) {
+    var date = parseDateStr_(dateStr);
+    var sheet = getSheetForDate(date);
 
-  return getAdminData(pin);
+    var headerRow = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
+    var col = -1;
+    for (var c = 0; c < MAX_TASK_COLUMNS; c++) {
+      if (headerRow[c] && String(headerRow[c]).trim().toLowerCase() === name.toLowerCase()) { col = c; break; }
+    }
+    if (col === -1) {
+      for (var c2 = 0; c2 < MAX_TASK_COLUMNS; c2++) {
+        if (!headerRow[c2]) { col = c2; break; }
+      }
+    }
+    if (col === -1) { skipped.push(dateStr); return; }
+
+    headerRow[col] = name;
+    sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
+    sheet.getRange(TABLE3_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]); // mirror header onto completion table
+
+    var existingCol = sheet.getRange(TABLE2_START_ROW, 3 + col, MAX_EMPLOYEES, 1).getValues();
+    var colValues = [];
+    for (var r = 0; r < MAX_EMPLOYEES; r++) {
+      var slotId = slots[r].id;
+      var wasChecked = !!existingCol[r][0];
+      var nowChecked = !!(assignments && assignments[slotId]);
+      colValues.push([wasChecked || nowChecked]);
+    }
+    sheet.getRange(TABLE2_START_ROW, 3 + col, MAX_EMPLOYEES, 1).setValues(colValues);
+
+    applied.push(dateStr);
+  });
+
+  return { applied: applied, skipped: skipped };
+}
+
+function parseDateStr_(s) {
+  // s = 'yyyy-MM-dd' — build the Date the same way the sheet lookups expect
+  // (a local date at midnight), not via new Date(string) which can shift by
+  // a day depending on how the browser/server parses the timezone.
+  var parts = String(s).split('-');
+  return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+}
+
+function ymdFromDate_(date) {
+  return Utilities.formatDate(date, TIMEZONE, 'yyyy-MM-dd');
+}
+
+// Reads the task list + assignments from the day before dateStr (default:
+// today) — it does NOT write anything. This only stages those tasks into
+// the "Tasks for [date]" editor on the client; nothing is saved to dateStr's
+// own tab until the admin clicks "Save tasks", same as any other edit made
+// there. (Completion times are never part of this — a fresh day always
+// starts with nothing marked done, even when the same tasks are reused.)
+function copyPreviousDayTasks(pin, dateStr) {
+  assertPin_(pin);
+  var date = dateStr ? parseDateStr_(dateStr) : new Date();
+  var prev = new Date(date);
+  prev.setDate(prev.getDate() - 1);
+  var prevSheet = getSheetForDate(prev);
+
+  var headerRow = prevSheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
+  var grid = prevSheet.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).getValues();
+  var activeEmployees = getActiveEmployeesWithIndex_();
+
+  var tasks = [];
+  for (var c = 0; c < MAX_TASK_COLUMNS; c++) {
+    if (!headerRow[c]) continue;
+    var assignments = {};
+    activeEmployees.forEach(function (emp) { assignments[emp.id] = !!grid[emp.idx][c]; });
+    tasks.push({ name: headerRow[c], assignments: assignments, standing: null });
+  }
+  return { tasks: tasks };
 }
 
 // ---- Admin: employee roster management -------------------------------------
@@ -485,6 +714,51 @@ function removeEmployee(pin, id) {
   syncEmployeeNamesForRestOfMonth_();
 
   return { id: id, employees: listEmployees(pin) };
+}
+
+// ---- Admin: standing (recurring) tasks -------------------------------------
+
+function listStandingTasks(pin) {
+  assertPin_(pin);
+  return getAllStandingTasks_();
+}
+
+// task: { id?: string, name: string, days: [0-6, ...], assignments: { employeeId: bool } }
+// Omit id to create a new one; pass an existing id to edit it in place.
+function saveStandingTask(pin, task) {
+  assertPin_(pin);
+  var name = ((task && task.name) || '').trim();
+  if (!name) throw new Error('Enter a task name.');
+  var days = (task && task.days) || [];
+  if (!days.length) throw new Error('Pick at least one day of the week.');
+
+  var list = getAllStandingTasks_();
+  if (task.id) {
+    var idx = list.findIndex(function (t) { return t.id === task.id; });
+    if (idx === -1) throw new Error('Unknown standing task.');
+    list[idx] = { id: task.id, name: name, days: days, assignments: task.assignments || {}, active: true };
+  } else {
+    if (list.filter(function (t) { return t.active; }).length >= MAX_STANDING_TASKS) {
+      throw new Error('Max ' + MAX_STANDING_TASKS + ' standing tasks — remove one first.');
+    }
+    list.push({ id: Utilities.getUuid(), name: name, days: days, assignments: task.assignments || {}, active: true });
+  }
+  saveStandingTasksList_(list);
+  resyncStandingTasksForRestOfMonth_();
+
+  return getAllStandingTasks_();
+}
+
+// Stops a standing task from being seeded into brand-new days going
+// forward. Days that already have it — including future days already
+// pre-built this month — are left exactly as they are, same as removing an
+// employee doesn't erase their past attendance. Remove it from an individual
+// day via that day's own task editor if you need it gone from a specific day.
+function removeStandingTask(pin, id) {
+  assertPin_(pin);
+  var list = getAllStandingTasks_().filter(function (t) { return t.id !== id; });
+  saveStandingTasksList_(list);
+  return list;
 }
 
 /**

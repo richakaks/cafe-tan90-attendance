@@ -24,6 +24,16 @@
   .wrap { max-width: 900px; margin: 0 auto; }
   h1 { font-size: 22px; font-weight: 700; color: var(--navy); margin: 0 0 6px; }
   .subtitle { font-size: 14px; color: var(--text-secondary); margin: 0 0 20px; line-height: 1.6; }
+
+  .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+  .tab-btn {
+    font-family: inherit; font-size: 13px; font-weight: 500; padding: 10px 18px;
+    border-radius: 8px; border: 1px solid var(--border); background: #fff;
+    color: var(--text-primary); cursor: pointer;
+  }
+  .tab-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .view { display: none; }
+  .view.active { display: block; }
   .card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; }
   .card h2 { font-size: 15px; font-weight: 700; color: var(--navy); margin: 0 0 4px; }
   .card p.hint { font-size: 12px; color: var(--text-secondary); margin: 0 0 14px; line-height: 1.6; }
@@ -95,4 +105,52 @@
 
   .note-box { background: var(--navy-light); color: var(--navy); border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.6; margin-bottom: 20px; }
   footer { font-size: 12px; color: var(--text-secondary); line-height: 1.7; margin-top: 8px; }
+
+  .plan-calendar { max-width: 320px; margin: 0 auto 4px; }
+  .cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 600; color: var(--navy); font-size: 13px; }
+  .cal-nav button { min-width: 32px; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); row-gap: 4px; }
+  .cal-dow { text-align: center; font-size: 11px; color: var(--text-secondary); font-weight: 600; padding-bottom: 4px; }
+  .cal-cell {
+    display: flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; margin: 0 auto;
+    border-radius: 50%; font-size: 13px; cursor: pointer;
+    color: var(--text-primary); background: transparent;
+  }
+  .cal-cell:hover { background: var(--navy-light); }
+  .cal-cell.empty { cursor: default; }
+  .cal-cell.empty:hover { background: transparent; }
+  .cal-cell.past { opacity: 0.55; }
+  .cal-cell.today { box-shadow: inset 0 0 0 1.5px var(--navy); font-weight: 700; }
+  .cal-cell.selected { background: var(--navy); color: #fff; font-weight: 700; }
+  .cal-cell.selected.today { box-shadow: none; }
+  .cal-cell { position: relative; }
+  .cal-cell.has-tasks::after {
+    content: ''; position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
+    width: 5px; height: 5px; border-radius: 50%; background: var(--navy);
+  }
+  .cal-cell.selected.has-tasks::after, .cal-cell.past.has-tasks::after { background: #fff; opacity: 0.9; }
+  .cal-cell.past.has-tasks::after { background: var(--navy); }
+  .plan-assignments { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 10px; }
+  .plan-check { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+
+  .plan-preview {
+    max-width: 320px; margin: 0 auto 16px; background: var(--muted-bg);
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  }
+  .plan-preview-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .plan-preview-head b { font-size: 13px; color: var(--navy); }
+  .preview-task { font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .preview-task:last-child { border-bottom: none; }
+  .btn-small { padding: 6px 10px; font-size: 12px; }
+
+  .repeat-chip {
+    font-family: inherit; font-size: 11px; font-weight: 600; padding: 5px 10px;
+    border-radius: 999px; border: 1px solid var(--border); background: #fff;
+    color: var(--text-secondary); cursor: pointer; white-space: nowrap;
+  }
+  .repeat-chip:hover { background: var(--muted-bg); }
+  .repeat-chip.active { background: var(--navy-light); color: var(--navy); border-color: var(--navy-light); }
+  .repeat-editor-row td { background: var(--muted-bg); border-bottom: 1px solid var(--border); }
+  .repeat-editor { padding: 4px 0; }
 </style>

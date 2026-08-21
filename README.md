@@ -1,6 +1,6 @@
 # Cafe Tan90 Attendance
 
-A staff attendance + task tracker for Cafe Tan90 (Miw, Nureen, Richa). One shared screen for logging in/out and marking tasks done, an admin page for setting daily tasks and managing the employee roster, and a live Google Sheet as the record — no manual export, ever.
+A staff attendance + task tracker for Cafe Tan90 (Miw, Nureen, Richa). One page, one URL — a "Staff view" tab for logging in/out and marking tasks done, and a PIN-gated "Admin view" tab for setting daily tasks and managing the employee roster — backed by a live Google Sheet as the record, no manual export, ever.
 
 ## Why this runs on Google Apps Script, not a normal web host
 
@@ -10,9 +10,9 @@ The backend needs to create Google Sheets, write to them, and read them back in 
 
 ## What's in here
 
-- `appscript/Code.gs` — server-side logic: employee roster (add/rename/remove, up to 8), monthly spreadsheet auto-creation (one Google Sheet per calendar month, a tab per day, pre-built in advance), attendance log-in/out, task assignment + completion tracking, admin PIN check.
-- `appscript/Staff.html` — the shared-screen page staff use to log in/out and mark tasks done.
-- `appscript/Admin.html` — PIN-gated page for setting each day's tasks, managing employees, and a shortcut to open the live Sheet.
+- `appscript/Code.gs` — server-side logic: employee roster (add/rename/remove, up to 8), standing/recurring tasks (auto-seeded onto every matching day), monthly spreadsheet auto-creation (one Google Sheet per calendar month, a tab per day, pre-built in advance), attendance log-in/out, task assignment + completion tracking, admin PIN check.
+- `appscript/Staff.html` — the single page that's actually served (`doGet()` always renders this one). Has the shared-screen Staff tab (log in/out, mark tasks done) and pulls in `Admin.html` as its Admin tab via Apps Script's `include()` — one URL, two tabs, no separate admin link to remember.
+- `appscript/Admin.html` — **not served on its own** — a body-only partial included into `Staff.html`'s Admin tab. PIN-gated (the tab is visible to anyone, but nothing behind it renders until the PIN is entered): one unified task list for any date (each task can be marked "Repeats" on chosen days of the week, right on its own row — no separate recurring-tasks card), a "Plan tasks ahead" calendar for one-off tasks across a week or month (dates with tasks get a dot; click one to preview or jump to editing it), employee management, and a shortcut to open the live Sheet.
 - `appscript/Stylesheet.html` — shared styling (navy/card look, matching the Enrich Lead Allocation demo this was modeled after).
 - `appscript/appsscript.json` — Apps Script project manifest (timezone, web app config).
 - `preview.html` — a standalone, in-browser mockup (no backend) of both pages, useful for reviewing the design/flow without deploying anything.
