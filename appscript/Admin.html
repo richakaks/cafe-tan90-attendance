@@ -132,11 +132,12 @@
           <input type="date" id="payroll-day-input" onchange="loadPayrollDay_(this.value)" class="task-name-input" style="width:auto;">
         </div>
       </div>
-      <p class="hint">Hours are exact to the minute, not rounded to a quarter hour, computed from actual log in/out times and paid at whatever rate applied that day.</p>
+      <p class="hint">Hours are exact to the minute, not rounded to a quarter hour, computed from actual log in/out times and paid at whatever rate applied that day. Missed or wrong punches can be corrected with the Edit button on any row, for any day.</p>
       <table>
-        <thead><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead>
+        <thead><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th><th></th></tr></thead>
         <tbody id="payroll-day-body"></tbody>
       </table>
+      <p class="hint" id="attendance-status" style="margin-top:10px;"></p>
     </div>
 
     <div class="card">
@@ -726,23 +727,71 @@ function submitRateChange_(id) {
 // ---- Payroll: day view ----
 
 var payrollDayIso = null;
+var payrollDayRows = [];
+var openAttendanceEditorId = null; // which row's attendance-correction editor is open, if any
 
 function loadPayrollDay_(iso) {
   payrollDayIso = iso;
+  openAttendanceEditorId = null;
   document.getElementById('payroll-day-input').value = iso;
   google.script.run.withSuccessHandler(function (data) {
     document.getElementById('payroll-day-label').textContent = data.dateLabel + (data.isToday ? ' (today)' : '');
-    var body = document.getElementById('payroll-day-body');
-    if (!data.rows.length) {
-      body.innerHTML = '<tr><td colspan="4" class="hint">No one logged in this day.</td></tr>';
-      return;
-    }
-    body.innerHTML = data.rows.map(function (r) {
-      return '<tr><td>' + r.name + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td></tr>';
-    }).join('');
+    payrollDayRows = data.rows;
+    renderPayrollDayBody_();
   }).withFailureHandler(function () {
-    document.getElementById('payroll-day-body').innerHTML = '<tr><td colspan="4" class="hint">Could not load that day.</td></tr>';
+    payrollDayRows = [];
+    document.getElementById('payroll-day-body').innerHTML = '<tr><td colspan="5" class="hint">Could not load that day.</td></tr>';
   }).getPayrollDay(pin, iso);
+}
+
+function renderPayrollDayBody_() {
+  var body = document.getElementById('payroll-day-body');
+  if (!payrollDayRows.length) {
+    body.innerHTML = '<tr><td colspan="5" class="hint">No one logged in this day.</td></tr>';
+    return;
+  }
+  body.innerHTML = payrollDayRows.map(function (r) {
+    var editedNote = (r.loginEdited || r.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    var row = '<tr><td>' + r.name + editedNote + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
+      '<td><button type="button" class="btn ghost" onclick="toggleAttendanceEditor_(\'' + r.id + '\')">Edit</button></td></tr>';
+    if (openAttendanceEditorId === r.id) row += renderAttendanceEditorRow_(r);
+    return row;
+  }).join('');
+}
+
+function renderAttendanceEditorRow_(r) {
+  return '<tr class="repeat-editor-row"><td colspan="5"><div class="repeat-editor">' +
+    '<p class="hint" style="margin:0 0 8px;">Correct ' + r.name + '\'s log in/out for this day. Leave a field blank to clear it (for example, to undo an accidental tap).</p>' +
+    '<div class="buttons" style="align-items:center;">' +
+    '<label class="hint" style="margin:0;">Log in<br><input type="time" class="task-name-input" id="att-in-' + r.id + '" style="width:auto;" value="' + r.loginTime + '"></label>' +
+    '<label class="hint" style="margin:0;">Log out<br><input type="time" class="task-name-input" id="att-out-' + r.id + '" style="width:auto;" value="' + r.logoutTime + '"></label>' +
+    '<button type="button" class="btn primary" onclick="submitAttendanceEdit_(\'' + r.id + '\')">Save</button>' +
+    '<button type="button" class="btn ghost" onclick="closeAttendanceEditor_()">Cancel</button>' +
+    '</div>' +
+    '</div></td></tr>';
+}
+
+function toggleAttendanceEditor_(id) {
+  openAttendanceEditorId = (openAttendanceEditorId === id) ? null : id;
+  document.getElementById('attendance-status').textContent = '';
+  renderPayrollDayBody_();
+}
+function closeAttendanceEditor_() { openAttendanceEditorId = null; renderPayrollDayBody_(); }
+
+function submitAttendanceEdit_(id) {
+  var loginVal = document.getElementById('att-in-' + id).value; // 'HH:mm', or '' to clear
+  var logoutVal = document.getElementById('att-out-' + id).value;
+  document.getElementById('attendance-status').textContent = 'Saving…';
+  google.script.run.withSuccessHandler(function (data) {
+    payrollDayRows = data.rows;
+    openAttendanceEditorId = null;
+    renderPayrollDayBody_();
+    document.getElementById('attendance-status').textContent = 'Saved.';
+    // The correction may change this day's (and this month's) totals.
+    loadPayrollMonth_(payrollMonthIso_());
+  }).withFailureHandler(function (e) {
+    document.getElementById('attendance-status').textContent = 'Could not save, ' + (e && e.message ? e.message : 'try again.');
+  }).setAttendanceTimes(pin, id, payrollDayIso, loginVal, logoutVal);
 }
 
 function payrollPrevDay() { loadPayrollDay_(shiftIso_(payrollDayIso, -1)); }

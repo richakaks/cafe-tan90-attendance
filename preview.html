@@ -340,11 +340,12 @@
             <input type="date" id="payroll-day-input" onchange="loadPayrollDay_(this.value)" class="task-name-input" style="width:auto;">
           </div>
         </div>
-        <p class="hint">Hours are exact to the minute, not rounded to a quarter hour, computed from actual log in/out times and paid at whatever rate applied that day.</p>
+        <p class="hint">Hours are exact to the minute, not rounded to a quarter hour, computed from actual log in/out times and paid at whatever rate applied that day. Missed or wrong punches can be corrected with the Edit button on any row, for any day.</p>
         <table>
-          <thead><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead>
+          <thead><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th><th></th></tr></thead>
           <tbody id="payroll-day-body"></tbody>
         </table>
+        <p class="hint" id="attendance-status" style="margin-top:10px;"></p>
       </div>
 
       <div class="card">
@@ -381,9 +382,9 @@
 
 var state = {
   employees: [
-    { id: 'MIW', name: 'Miw', loginTime: null, logoutTime: null, present: false },
-    { id: 'NUREEN', name: 'Nureen', loginTime: null, logoutTime: null, present: false },
-    { id: 'RICHA', name: 'Richa', loginTime: null, logoutTime: null, present: false }
+    { id: 'MIW', name: 'Miw', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false },
+    { id: 'NUREEN', name: 'Nureen', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false },
+    { id: 'RICHA', name: 'Richa', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false }
   ],
   standingTasks: [
     { id: 'STD1', name: 'Make base milk', days: [1, 2, 3, 4, 5], assignments: { MIW: true, NUREEN: false, RICHA: false } },
@@ -392,7 +393,8 @@ var state = {
   // completions[employeeId][taskIndex] = "HH:MM:SS" once marked done (today's task table only)
   completions: { MIW: {}, NUREEN: {}, RICHA: {} },
   days: {}, // 'yyyy-MM-dd' -> { tasks: [{name, assignments}] }
-  wageRates: {} // employeeId -> [{effectiveFrom: 'yyyy-MM-dd', rate}, ...]
+  wageRates: {}, // employeeId -> [{effectiveFrom: 'yyyy-MM-dd', rate}, ...]
+  attendanceOverrides: {} // 'yyyy-MM-dd' -> employeeId -> {loginTime, logoutTime, loginEdited, logoutEdited}, non-today admin corrections
 };
 var standingSeq = 3;
 var employeeSeq = 4;
@@ -612,7 +614,7 @@ var payrollDayIso = null;
 var payrollMonth = new Date();
 payrollMonth.setDate(1);
 
-function timeStrToMinutes_(t) { var p = t.split(':').map(Number); return p[0] * 60 + p[1] + p[2] / 60; }
+function timeStrToMinutes_(t) { var p = t.split(':').map(Number); return p[0] * 60 + p[1] + (p[2] || 0) / 60; }
 function hoursFromTimes_(inStr, outStr) {
   if (!inStr || !outStr) return 0;
   var mins = timeStrToMinutes_(outStr) - timeStrToMinutes_(inStr);
@@ -640,6 +642,39 @@ function getRateForEmployeeOnDate_(empId, dateIso) {
   history.forEach(function (entry) { if (entry.effectiveFrom <= dateIso && (!best || entry.effectiveFrom > best.effectiveFrom)) best = entry; });
   if (best) applicable = best.rate;
   return applicable;
+}
+
+// Mirrors Code.gs's single-source-of-truth idea (log in/out time is the one
+// place hours/pay come from) for a day that isn't backed by a real fake
+// spreadsheet here. Today reads straight from the live employee object (an
+// admin correction there also fixes what the Staff tab shows and unlocks
+// task-marking, same as a real punch would). Any other day checks for an
+// admin correction first, falling back to the deterministic demo hours so
+// there's still something to look at and correct.
+function getAttendanceForDay_(iso, empId) {
+  var todayIso = ymd_(startOfDay_(new Date()));
+  if (iso === todayIso) {
+    var emp = state.employees.find(function (e) { return e.id === empId; });
+    return {
+      loginTime: (emp && emp.loginTime) || '',
+      logoutTime: (emp && emp.logoutTime) || '',
+      loginEdited: !!(emp && emp.loginEdited),
+      logoutEdited: !!(emp && emp.logoutEdited)
+    };
+  }
+  var override = (state.attendanceOverrides[iso] || {})[empId];
+  if (override) return override;
+
+  var hours = demoHoursForDay_(iso, empId);
+  if (!hours) return { loginTime: '', logoutTime: '', loginEdited: false, logoutEdited: false };
+  var totalMin = Math.round(hours * 60);
+  var endTotal = 9 * 60 + totalMin; // demo days start at 09:00
+  return {
+    loginTime: '09:00:00',
+    logoutTime: pad2_(Math.floor(endTotal / 60)) + ':' + pad2_(endTotal % 60) + ':00',
+    loginEdited: false,
+    logoutEdited: false
+  };
 }
 
 function loadWageRates_() {
@@ -697,21 +732,97 @@ function submitRateChange_(id) {
   loadPayrollMonth_(payrollMonthIso_());
 }
 
+var payrollDayRows = [];
+var openAttendanceEditorId = null; // which row's attendance-correction editor is open, if any
+
 function loadPayrollDay_(iso) {
   payrollDayIso = iso;
+  openAttendanceEditorId = null;
   document.getElementById('payroll-day-input').value = iso;
   var todayIso = ymd_(startOfDay_(new Date()));
   var isToday = iso === todayIso;
   document.getElementById('payroll-day-label').textContent = formatDateLabel_(parseIso_(iso)) + (isToday ? ' (today)' : '');
-  var rows = state.employees.map(function (emp) {
-    var hours = isToday ? hoursFromTimes_(emp.loginTime, emp.logoutTime) : demoHoursForDay_(iso, emp.id);
+  payrollDayRows = state.employees.map(function (emp) {
+    var att = getAttendanceForDay_(iso, emp.id);
+    var hours = hoursFromTimes_(att.loginTime, att.logoutTime);
     var rate = getRateForEmployeeOnDate_(emp.id, iso);
-    return { name: emp.name, hoursLabel: formatHoursMins_(hours), rate: rate, pay: Math.round(hours * rate * 100) / 100 };
+    return {
+      id: emp.id, name: emp.name, hoursLabel: formatHoursMins_(hours), rate: rate, pay: Math.round(hours * rate * 100) / 100,
+      loginTime: att.loginTime ? att.loginTime.slice(0, 5) : '', logoutTime: att.logoutTime ? att.logoutTime.slice(0, 5) : '',
+      loginEdited: att.loginEdited, logoutEdited: att.logoutEdited
+    };
   });
+  renderPayrollDayBody_();
+}
+
+function renderPayrollDayBody_() {
   var body = document.getElementById('payroll-day-body');
-  body.innerHTML = rows.map(function (r) {
-    return '<tr><td>' + r.name + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td></tr>';
+  if (!payrollDayRows.length) {
+    body.innerHTML = '<tr><td colspan="5" class="hint">No one logged in this day.</td></tr>';
+    return;
+  }
+  body.innerHTML = payrollDayRows.map(function (r) {
+    var editedNote = (r.loginEdited || r.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    var row = '<tr><td>' + r.name + editedNote + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
+      '<td><button type="button" class="btn ghost" onclick="toggleAttendanceEditor_(\'' + r.id + '\')">Edit</button></td></tr>';
+    if (openAttendanceEditorId === r.id) row += renderAttendanceEditorRow_(r);
+    return row;
   }).join('');
+}
+
+function renderAttendanceEditorRow_(r) {
+  return '<tr class="repeat-editor-row"><td colspan="5"><div class="repeat-editor">' +
+    '<p class="hint" style="margin:0 0 8px;">Correct ' + r.name + '\'s log in/out for this day. Leave a field blank to clear it (for example, to undo an accidental tap).</p>' +
+    '<div class="buttons" style="align-items:center;">' +
+    '<label class="hint" style="margin:0;">Log in<br><input type="time" class="task-name-input" id="att-in-' + r.id + '" style="width:auto;" value="' + r.loginTime + '"></label>' +
+    '<label class="hint" style="margin:0;">Log out<br><input type="time" class="task-name-input" id="att-out-' + r.id + '" style="width:auto;" value="' + r.logoutTime + '"></label>' +
+    '<button type="button" class="btn primary" onclick="submitAttendanceEdit_(\'' + r.id + '\')">Save</button>' +
+    '<button type="button" class="btn ghost" onclick="closeAttendanceEditor_()">Cancel</button>' +
+    '</div>' +
+    '</div></td></tr>';
+}
+
+function toggleAttendanceEditor_(id) {
+  openAttendanceEditorId = (openAttendanceEditorId === id) ? null : id;
+  document.getElementById('attendance-status').textContent = '';
+  renderPayrollDayBody_();
+}
+function closeAttendanceEditor_() { openAttendanceEditorId = null; renderPayrollDayBody_(); }
+
+function submitAttendanceEdit_(id) {
+  var loginVal = document.getElementById('att-in-' + id).value; // 'HH:MM', or '' to clear
+  var logoutVal = document.getElementById('att-out-' + id).value;
+  var todayIso = ymd_(startOfDay_(new Date()));
+  if (payrollDayIso > todayIso) { alert('Can\'t set attendance for a future date.'); return; }
+  if (loginVal && logoutVal && logoutVal <= loginVal) { alert('Log out time must be after log in time.'); return; }
+
+  var prev = payrollDayRows.find(function (r) { return r.id === id; }) || { loginTime: '', logoutTime: '' };
+  var loginChanged = loginVal !== prev.loginTime;
+  var logoutChanged = logoutVal !== prev.logoutTime;
+  var loginEdited = prev.loginEdited || loginChanged;
+  var logoutEdited = prev.logoutEdited || logoutChanged;
+  var loginTimeFull = loginVal ? loginVal + ':00' : '';
+  var logoutTimeFull = logoutVal ? logoutVal + ':00' : '';
+
+  if (payrollDayIso === todayIso) {
+    var emp = state.employees.find(function (e) { return e.id === id; });
+    emp.loginTime = loginTimeFull;
+    emp.logoutTime = logoutTimeFull;
+    emp.present = !!loginTimeFull;
+    emp.loginEdited = loginEdited;
+    emp.logoutEdited = logoutEdited;
+    renderStaff();
+  } else {
+    if (!state.attendanceOverrides[payrollDayIso]) state.attendanceOverrides[payrollDayIso] = {};
+    state.attendanceOverrides[payrollDayIso][id] = {
+      loginTime: loginTimeFull, logoutTime: logoutTimeFull, loginEdited: loginEdited, logoutEdited: logoutEdited
+    };
+  }
+
+  openAttendanceEditorId = null;
+  loadPayrollDay_(payrollDayIso);
+  loadPayrollMonth_(payrollMonthIso_());
+  document.getElementById('attendance-status').textContent = 'Saved.';
 }
 
 function payrollPrevDay() { loadPayrollDay_(shiftIso_(payrollDayIso, -1)); }
@@ -731,7 +842,8 @@ function loadPayrollMonth_(monthIso) {
     var iso = parts[0] + '-' + pad2_(parts[1]) + '-' + pad2_(day);
     if (iso > todayIso) continue; // future days: nobody's logged in yet, same as the real app
     state.employees.forEach(function (emp, i) {
-      var hours = (iso === todayIso) ? hoursFromTimes_(emp.loginTime, emp.logoutTime) : demoHoursForDay_(iso, emp.id);
+      var att = getAttendanceForDay_(iso, emp.id);
+      var hours = hoursFromTimes_(att.loginTime, att.logoutTime);
       var rate = getRateForEmployeeOnDate_(emp.id, iso);
       totals[i].hours += hours;
       totals[i].pay += hours * rate;
@@ -1175,7 +1287,7 @@ function addEmployeeFlow() {
   if (!name) return;
   name = capitalizeWords_(name);
   var id = 'EMP' + (employeeSeq++);
-  state.employees.push({ id: id, name: name, loginTime: null, logoutTime: null, present: false });
+  state.employees.push({ id: id, name: name, loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false });
   state.completions[id] = {};
   Object.keys(state.days).forEach(function (iso) {
     state.days[iso].tasks.forEach(function (t) { t.assignments[id] = false; });

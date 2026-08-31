@@ -69,7 +69,12 @@ var DEFAULT_ADMIN_PIN = '2468';
 var TABLE1_HEADER_ROW = 3;
 var TABLE1_START_ROW = 4;
 var TABLE1_END_ROW = TABLE1_START_ROW + MAX_EMPLOYEES - 1;
-var TABLE1_COLS = 5; // Name, Log In, Log Out, Hours, Present Today
+var TABLE1_COLS = 7; // Name, Log In, Log Out, Hours, Present Today, Login Edited, Logout Edited
+// The last two columns are booleans, set true by setAttendanceTimes_ (an
+// admin manually correcting a missed or wrong punch) and left blank/false
+// otherwise. A day tab built before this feature existed simply has nothing
+// in those columns, which reads back as blank/falsy, i.e. "not edited" -
+// no migration needed for already-existing tabs.
 
 var TABLE2_HEADER_ROW = TABLE1_END_ROW + 2; // one blank row between tables
 var TABLE2_SUBHEADER_ROW = TABLE2_HEADER_ROW + 1;
@@ -292,12 +297,12 @@ function ensureDaySheet(ss, date) {
   // Table 1: attendance log + Present Today (moved here from the old Table
   // 2, since Table 2 no longer has employee rows to hold it — Present is a
   // per-employee attribute, so it belongs alongside the rest of Table 1).
-  sheet.getRange(TABLE1_HEADER_ROW, 1, 1, TABLE1_COLS).setValues([['Name', 'Log In Time', 'Log Out Time', 'Hours Worked', 'Present Today']]).setFontWeight('bold');
+  sheet.getRange(TABLE1_HEADER_ROW, 1, 1, TABLE1_COLS).setValues([['Name', 'Log In Time', 'Log Out Time', 'Hours Worked', 'Present Today', 'Login Edited', 'Logout Edited']]).setFontWeight('bold');
   sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names.map(function (n) { return [n]; }));
   sheet.getRange(TABLE1_START_ROW, 4, MAX_EMPLOYEES, 1).setFormulaR1C1('=IF(AND(RC[-2]<>"",RC[-1]<>""),(RC[-1]-RC[-2])*24,"")');
   sheet.getRange(TABLE1_START_ROW, 2, MAX_EMPLOYEES, 2).setNumberFormat('hh:mm:ss AM/PM');
   sheet.getRange(TABLE1_START_ROW, 4, MAX_EMPLOYEES, 1).setNumberFormat('0.00" hrs"');
-  sheet.getRange(TABLE1_START_ROW, 5, MAX_EMPLOYEES, 1).setValue(false);
+  sheet.getRange(TABLE1_START_ROW, 5, MAX_EMPLOYEES, 3).setValue(false); // Present Today, Login Edited, Logout Edited
 
   // Table 2: tasks, one row per task (unlimited). Header row: task-name
   // label + each employee's name merged across a pair of columns.
@@ -890,11 +895,18 @@ function computePayrollDay_(sheet, dateStr, slots) {
   var namesCol = sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 1).getValues();
   var inCol = sheet.getRange(TABLE1_START_ROW, 2, MAX_EMPLOYEES, 1).getValues();
   var outCol = sheet.getRange(TABLE1_START_ROW, 3, MAX_EMPLOYEES, 1).getValues();
+  var editedCol = sheet.getRange(TABLE1_START_ROW, 6, MAX_EMPLOYEES, 2).getValues(); // [Login Edited, Logout Edited]
   return slots.map(function (s, i) {
     var name = namesCol[i][0] || '';
-    var hours = hoursBetween_(inCol[i][0], outCol[i][0]);
+    var inTime = inCol[i][0] || null;
+    var outTime = outCol[i][0] || null;
+    var hours = hoursBetween_(inTime, outTime);
     var rate = getRateForEmployeeOnDate_(s.id, dateStr);
-    return { id: s.id, name: name, hours: hours, rate: rate, pay: hours * rate };
+    return {
+      id: s.id, name: name, hours: hours, rate: rate, pay: hours * rate,
+      inTime: inTime, outTime: outTime,
+      loginEdited: !!editedCol[i][0], logoutEdited: !!editedCol[i][1]
+    };
   });
 }
 
@@ -919,7 +931,11 @@ function getPayrollDay(pin, dateStr) {
       hours: round2_(r.hours),
       hoursLabel: formatHoursMins_(r.hours),
       rate: r.rate,
-      pay: round2_(r.pay)
+      pay: round2_(r.pay),
+      loginTime: r.inTime ? Utilities.formatDate(r.inTime, TIMEZONE, 'HH:mm') : '',
+      logoutTime: r.outTime ? Utilities.formatDate(r.outTime, TIMEZONE, 'HH:mm') : '',
+      loginEdited: r.loginEdited,
+      logoutEdited: r.logoutEdited
     });
   });
 
@@ -1003,6 +1019,64 @@ function setWageRate(pin, employeeId, rate, effectiveFromStr) {
   saveWageRates_(map);
 
   return getWageRatesInfo(pin);
+}
+
+// ---- Admin: attendance correction ----------------------------------------
+//
+// Staff sometimes forget to tap log in/out, or tap the wrong one - and since
+// pay is now computed straight from those timestamps, a missed punch isn't
+// just a display glitch, it under- or over-pays that day. This lets an admin
+// fix the actual log in/out time for any employee on any day (not just
+// today), same as editing the Sheet cell by hand would, but validated and
+// without needing to know the sheet layout. Editing (or clearing) a field
+// only flips its "edited" flag if the value actually changed, so a save that
+// touches one field doesn't falsely mark the other as admin-corrected too.
+//
+// loginTimeStr / logoutTimeStr: 'HH:mm', or '' / falsy to clear that field.
+function setAttendanceTimes(pin, employeeId, dateStr, loginTimeStr, logoutTimeStr) {
+  assertPin_(pin);
+  if (!dateStr) throw new Error('Pick a date.');
+  var todayIso = ymdFromDate_(new Date());
+  if (dateStr > todayIso) throw new Error('Can\'t set attendance for a future date.');
+
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId; });
+  if (idx === -1) throw new Error('Unknown employee.');
+
+  var date = parseDateStr_(dateStr);
+  function toDateOrNull(timeStr) {
+    if (!timeStr) return null;
+    var parts = String(timeStr).split(':');
+    var h = Number(parts[0]), m = Number(parts[1]);
+    if (isNaN(h) || isNaN(m)) throw new Error('Invalid time.');
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, m, 0);
+  }
+  var newLogin = toDateOrNull(loginTimeStr);
+  var newLogout = toDateOrNull(logoutTimeStr);
+  if (newLogin && newLogout && newLogout.getTime() <= newLogin.getTime()) {
+    throw new Error('Log out time must be after log in time.');
+  }
+
+  var sheet = getSheetForDate(date);
+  var row = TABLE1_START_ROW + idx;
+
+  var existingIn = sheet.getRange(row, 2).getValue();
+  var existingOut = sheet.getRange(row, 3).getValue();
+  var existingInStr = existingIn ? Utilities.formatDate(existingIn, TIMEZONE, 'HH:mm') : '';
+  var existingOutStr = existingOut ? Utilities.formatDate(existingOut, TIMEZONE, 'HH:mm') : '';
+  var loginChanged = (loginTimeStr || '') !== existingInStr;
+  var logoutChanged = (logoutTimeStr || '') !== existingOutStr;
+
+  sheet.getRange(row, 2).setValue(newLogin || '');
+  sheet.getRange(row, 3).setValue(newLogout || '');
+  if (loginChanged) sheet.getRange(row, 6).setValue(true);
+  if (logoutChanged) sheet.getRange(row, 7).setValue(true);
+  // Present Today follows the (possibly just-corrected) log-in, same as a
+  // normal tap on the Staff page would - so filling in a missed log-in also
+  // makes that day's task-marking work, and clearing one un-marks present.
+  sheet.getRange(row, 5).setValue(!!newLogin);
+
+  return getPayrollDay(pin, dateStr);
 }
 
 /**
