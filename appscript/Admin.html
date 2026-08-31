@@ -6,7 +6,7 @@
   not spelling out the include syntax itself in this comment — Apps Script's
   template engine scans raw text for scriptlet tags even inside comments.)
 -->
-<p class="hint" style="margin:-6px 0 20px;">Set up tasks and who's doing them. "Present today" fills itself in from the staff page — you don't touch it here.</p>
+<p class="hint" style="margin:-6px 0 20px;">Set up tasks and who's doing them, and manage the team. PIN required below.</p>
 
   <div class="card lock-screen" id="admin-lock">
     <h2>Admin access</h2>
@@ -18,9 +18,15 @@
   </div>
 
   <div id="admin-panel" style="display:none;">
+    <div class="tabs" style="margin-bottom:16px;">
+      <button type="button" class="tab-btn active" id="subtab-tasks" onclick="showAdminSubView('tasks')">Tasks</button>
+      <button type="button" class="tab-btn" id="subtab-payroll" onclick="showAdminSubView('payroll')">Payroll</button>
+    </div>
+
+  <div class="view active" id="adminview-tasks">
     <div class="card">
       <h2>This month's data</h2>
-      <p class="hint">Everything staff log gets written straight into this Google Sheet — opens straight to today's tab.</p>
+      <p class="hint">Everything staff log gets written straight into this Google Sheet. Opens straight to today's tab.</p>
       <div class="buttons">
         <button class="btn" onclick="openSheet()">Open this month's Sheet ↗</button>
       </div>
@@ -28,7 +34,7 @@
 
     <div class="card">
       <h2>Employees</h2>
-      <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward — their past attendance history stays exactly as it was in the Sheet.</p>
+      <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet.</p>
       <table>
         <thead><tr><th>Name</th><th></th></tr></thead>
         <tbody id="employee-body"></tbody>
@@ -41,7 +47,7 @@
 
     <div class="card" id="tasks-card">
       <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-        <h2 style="margin:0;">Tasks for <span id="editor-date-label">—</span></h2>
+        <h2 style="margin:0;">Tasks for <span id="editor-date-label">-</span></h2>
         <div class="buttons" style="margin:0;">
           <button class="btn ghost" onclick="editorPrevDay()">‹ Prev day</button>
           <button class="btn ghost" onclick="editorGoToday()">Today</button>
@@ -49,7 +55,7 @@
           <input type="date" id="editor-date-input" onchange="loadEditorDateGuarded_(this.value)" class="task-name-input" style="width:auto;">
         </div>
       </div>
-      <p class="hint">Add each task once, then tick who's doing it. Use "Repeats" on a task to make it repeat automatically on chosen days of the week (e.g. "Make base milk" every Mon–Fri) — no need to re-add it each day. Jump to any date with the picker above, including anything planned ahead, to view, edit, or delete it — not just today. <b>Nothing here is saved until you click "Save tasks" below</b> — that one click also applies any Repeats changes you made.</p>
+      <p class="hint">Click <b>+ Add task</b> below to add a row, type its name, and tick who's doing it. Each row has a small <b>Repeats</b> button next to its name, it says "One-time" until you set it. Click it and tick the days of the week you want that task to happen on, for example Mon-Fri for "Make base milk", then it shows up on those days automatically, with no need to re-add it. Jump to any date with the picker above, including anything planned ahead, to view, edit, or delete it, not just today. <b>Nothing here is saved until you click "Save tasks" below.</b> That one click also applies any Repeats changes you made.</p>
       <table>
         <thead id="admin-thead"></thead>
         <tbody id="admin-body"></tbody>
@@ -64,7 +70,7 @@
 
     <div class="card">
       <h2>Plan tasks ahead</h2>
-      <p class="hint">For one-off or short-run tasks — set one up once and apply it to a whole week or month at a time. Dates with a small dot already have tasks on them; <b>click any date to see what's on it</b> (or to jump there and edit). Tick dates below (or use the shortcuts), add who's doing it, then click "Add task to selected dates" — that click saves it immediately, there's no separate save step for this card.</p>
+      <p class="hint">For one-off or short-run tasks: set one up once and apply it to a whole week or month at a time. Dates with a small dot already have tasks on them; <b>click any date to see what's on it</b> (or to jump there and edit). Tick dates below, add who's doing it, then click "Add task to selected dates". That click saves it immediately, there's no separate save step for this card.</p>
 
       <div class="plan-calendar">
         <div class="cal-nav">
@@ -77,7 +83,7 @@
 
       <div class="plan-preview" id="plan-preview" style="display:none;">
         <div class="plan-preview-head">
-          <b id="plan-preview-date">—</b>
+          <b id="plan-preview-date">-</b>
           <button type="button" class="btn ghost btn-small" onclick="closePlanPreview()">✕</button>
         </div>
         <div id="plan-preview-body"></div>
@@ -95,7 +101,7 @@
       </div>
       <p class="hint" id="plan-selected-count" style="margin-top:8px; text-align:center;">0 dates selected</p>
 
-      <input type="text" id="plan-task-name" class="task-name-input" placeholder="Task name" style="margin-top:14px;">
+      <input type="text" id="plan-task-name" class="task-name-input" placeholder="Task name" autocapitalize="words" style="margin-top:14px;">
       <div class="plan-assignments" id="plan-assignments"></div>
 
       <div class="buttons">
@@ -105,11 +111,67 @@
     </div>
   </div>
 
+  <div class="view" id="adminview-payroll">
+    <div class="card">
+      <h2>Hourly rates</h2>
+      <p class="hint">Set what each person earns per hour. A rate change can start today, be backdated, or be scheduled for a future date, so past pay never silently changes unless you mean it to.</p>
+      <table>
+        <thead><tr><th>Name</th><th>Current rate</th><th></th></tr></thead>
+        <tbody id="rates-body"></tbody>
+      </table>
+      <p class="hint" id="rates-status" style="margin-top:10px;"></p>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">Payroll for <span id="payroll-day-label">-</span></h2>
+        <div class="buttons" style="margin:0;">
+          <button class="btn ghost" onclick="payrollPrevDay()">‹ Prev day</button>
+          <button class="btn ghost" onclick="payrollGoToday()">Today</button>
+          <button class="btn ghost" onclick="payrollNextDay()">Next day ›</button>
+          <input type="date" id="payroll-day-input" onchange="loadPayrollDay_(this.value)" class="task-name-input" style="width:auto;">
+        </div>
+      </div>
+      <p class="hint">Hours are exact to the minute, not rounded to a quarter hour, computed from actual log in/out times and paid at whatever rate applied that day.</p>
+      <table>
+        <thead><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead>
+        <tbody id="payroll-day-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">Month totals</h2>
+        <div class="cal-nav" style="margin:0; gap:10px;">
+          <button type="button" class="btn ghost" onclick="payrollPrevMonth()">‹</button>
+          <span id="payroll-month-label">-</span>
+          <button type="button" class="btn ghost" onclick="payrollNextMonth()">›</button>
+        </div>
+      </div>
+      <p class="hint">Running total for the month so far. Once the month ends, this number is the final total, nothing extra to do. Use the arrows above to look back at past months.</p>
+      <table>
+        <thead><tr><th>Name</th><th>Hours</th><th>Pay</th></tr></thead>
+        <tbody id="payroll-month-body"></tbody>
+      </table>
+      <p class="hint" id="payroll-month-total" style="margin-top:10px; text-align:right; font-weight:600;"></p>
+    </div>
+  </div>
+  </div>
+
 <script>
 var pin = null;
 var EMPLOYEES = []; // [{id, name}, ...] — active employees only
 var tasks = [];
 var currentEditorDate = null; // 'yyyy-MM-dd' — whichever date the "Tasks for" editor is showing
+
+// Capitalizes the first letter of each word — applied to task names and
+// employee names (never the PIN). Combined with autocapitalize="words" on
+// the inputs themselves (which handles on-screen/touch keyboards live as
+// you type), this also normalizes physical-keyboard typing and pasted text
+// once the field is committed.
+function capitalizeWords_(s) {
+  return (s || '').replace(/(^|\s)([a-z])/g, function (m, sep, ch) { return sep + ch.toUpperCase(); });
+}
 
 function unlockAdmin() {
   var val = document.getElementById('pin-input').value;
@@ -169,20 +231,22 @@ function repeatsChipLabel_(days) {
 
 function renderAdmin() {
   var thead = document.getElementById('admin-thead');
-  thead.innerHTML = '<tr><th>Task</th><th>Repeats</th>' + EMPLOYEES.map(function (e) { return '<th class="task-col">' + e.name + '</th>'; }).join('') + '<th></th></tr>';
+  thead.innerHTML = '<tr><th></th><th>Task</th><th>Repeats</th>' + EMPLOYEES.map(function (e) { return '<th class="task-col">' + e.name + '</th>'; }).join('') + '<th></th></tr>';
   var body = document.getElementById('admin-body');
   body.innerHTML = '';
-  var totalCols = EMPLOYEES.length + 3;
+  var totalCols = EMPLOYEES.length + 4;
 
   tasks.forEach(function (t, ti) {
     var tr = document.createElement('tr');
+    tr.setAttribute('data-ti', ti);
     var checks = EMPLOYEES.map(function (emp) {
       var checked = t.assignments[emp.id] ? 'checked' : '';
       return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + emp.id + '\',this.checked)"></td>';
     }).join('');
     var chipCls = 'repeat-chip' + (t.repeatDays && t.repeatDays.length ? ' active' : '');
     tr.innerHTML =
-      '<td><input type="text" class="task-name-input" value="' + t.name + '" onchange="renameTask(' + ti + ',this.value)"></td>' +
+      '<td class="drag-handle-cell"><span class="drag-handle" onpointerdown="taskRowDragStart_(event,' + ti + ')" onpointermove="taskRowDragMove_(event)" onpointerup="taskRowDragEnd_(event)" onpointercancel="taskRowDragEnd_(event)">≡</span></td>' +
+      '<td><input type="text" class="task-name-input" value="' + t.name + '" autocapitalize="words" onchange="renameTask(' + ti + ',this.value,this)"></td>' +
       '<td><button type="button" class="' + chipCls + '" onclick="toggleRepeatEditor(' + ti + ')">' + repeatsChipLabel_(t.repeatDays) + '</button></td>' +
       checks +
       '<td><button class="btn ghost" onclick="removeTask(' + ti + ')">✕</button></td>';
@@ -197,10 +261,11 @@ function renderAdmin() {
           ' onchange="toggleRepeatDay(' + ti + ',' + d.v + ',this.checked)"> ' + d.l + '</label>';
       }).join('');
       editorTr.innerHTML = '<td colspan="' + totalCols + '"><div class="repeat-editor">' +
-        '<p class="hint" style="margin:0 0 8px;">Repeats on:</p>' +
+        '<p class="hint" style="margin:0 0 8px;">Repeats on: (or use a shortcut below)</p>' +
         '<div class="plan-assignments">' + dayBoxes + '</div>' +
         '<div class="buttons" style="margin-top:10px;">' +
-        '<button type="button" class="btn ghost" onclick="clearRepeatDays(' + ti + ')">Make one-time</button>' +
+        '<button type="button" class="btn ghost" onclick="setRepeatPreset_(' + ti + ',\'weekdays\')">Weekdays</button>' +
+        '<button type="button" class="btn ghost" onclick="setRepeatPreset_(' + ti + ',\'daily\')">Daily</button>' +
         '<button type="button" class="btn primary" onclick="closeRepeatEditor()">Done</button>' +
         '</div>' +
         '<p class="hint" style="margin-top:6px;">Applies when you click "Save tasks" below.</p>' +
@@ -211,8 +276,54 @@ function renderAdmin() {
 }
 
 function toggleAssign(ti, empId, val) { tasks[ti].assignments[empId] = val; tasksDirty = true; }
-function renameTask(ti, val) { tasks[ti].name = val; tasksDirty = true; }
+function renameTask(ti, val, el) {
+  var v = capitalizeWords_(val);
+  tasks[ti].name = v;
+  if (el) el.value = v;
+  tasksDirty = true;
+}
 function removeTask(ti) { tasks.splice(ti, 1); openRepeatEditorIndex = -1; tasksDirty = true; renderAdmin(); }
+
+// ---- Drag-to-reorder (Pointer Events — works with touch AND mouse, unlike
+// native HTML5 drag-and-drop, which never fires on a touchscreen). Purely
+// client-side: whatever order `tasks` ends up in is what "Save tasks"
+// writes, so there's nothing to sync with the server mid-drag. ----
+
+var dragState = null;
+
+function taskRowDragStart_(e, ti) {
+  e.preventDefault();
+  dragState = { fromIndex: ti };
+  var handle = e.currentTarget;
+  try { handle.setPointerCapture(e.pointerId); } catch (err) { /* older browsers — drag still works, just without capture */ }
+  var tr = handle.closest('tr');
+  if (tr) tr.classList.add('dragging-row');
+}
+
+function taskRowDragMove_(e) {
+  if (!dragState) return;
+  var rows = document.querySelectorAll('#admin-body tr.drop-target');
+  for (var i = 0; i < rows.length; i++) rows[i].classList.remove('drop-target');
+  var target = document.elementFromPoint(e.clientX, e.clientY);
+  var tr = target && target.closest ? target.closest('tr[data-ti]') : null;
+  if (tr) tr.classList.add('drop-target');
+}
+
+function taskRowDragEnd_(e) {
+  if (!dragState) return;
+  var target = document.elementFromPoint(e.clientX, e.clientY);
+  var tr = target && target.closest ? target.closest('tr[data-ti]') : null;
+  var fromIndex = dragState.fromIndex;
+  var toIndex = tr ? Number(tr.getAttribute('data-ti')) : null;
+  dragState = null;
+  if (toIndex !== null && toIndex !== fromIndex) {
+    var moved = tasks.splice(fromIndex, 1)[0];
+    tasks.splice(toIndex, 0, moved);
+    tasksDirty = true;
+    openRepeatEditorIndex = -1;
+  }
+  renderAdmin(); // re-render clears the drag/drop-target classes either way, and reflects the new order if it changed
+}
 
 function toggleRepeatEditor(ti) {
   openRepeatEditorIndex = (openRepeatEditorIndex === ti) ? -1 : ti;
@@ -230,15 +341,13 @@ function toggleRepeatDay(ti, day, checked) {
   renderAdmin();
 }
 
-function clearRepeatDays(ti) {
-  tasks[ti].repeatDays = [];
+function setRepeatPreset_(ti, preset) {
+  tasks[ti].repeatDays = preset === 'daily' ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5];
   tasksDirty = true;
-  openRepeatEditorIndex = -1;
   renderAdmin();
 }
 
 function addTaskRow() {
-  if (tasks.length >= 8) { alert('Max 8 tasks per day.'); return; }
   var blank = {};
   EMPLOYEES.forEach(function (e) { blank[e.id] = false; });
   tasks.push({ name: 'New task', assignments: blank, standing: null, repeatDays: [] });
@@ -252,7 +361,7 @@ function copyPreviousDay() {
     openRepeatEditorIndex = -1;
     tasksDirty = true;
     renderAdmin();
-    document.getElementById('save-status').textContent = 'Copied from the previous day — click Save tasks to apply.';
+    document.getElementById('save-status').textContent = 'Copied from the previous day. Click Save tasks to apply.';
   }).withFailureHandler(function () { alert('Could not copy.'); }).copyPreviousDayTasks(pin, currentEditorDate);
 }
 
@@ -316,10 +425,10 @@ function saveTasks() {
       document.getElementById('save-status').textContent = 'Saved to ' + data.dateLabel + '.';
       syncCalendarAfterTaskChange_();
     }).withFailureHandler(function () {
-      document.getElementById('save-status').textContent = 'Could not save — try again.';
+      document.getElementById('save-status').textContent = 'Could not save, try again.';
     }).saveTasks(pin, currentEditorDate, tasks);
   }, function (e) {
-    document.getElementById('save-status').textContent = 'Could not save repeat settings — ' + (e && e.message ? e.message : 'try again.');
+    document.getElementById('save-status').textContent = 'Could not save repeat settings, ' + (e && e.message ? e.message : 'try again.');
   });
 }
 
@@ -331,7 +440,7 @@ function loadEditorDate(iso) {
     applyAdminData_(data);
     document.getElementById('save-status').textContent = '';
   }).withFailureHandler(function () {
-    document.getElementById('save-status').textContent = 'Could not load that day — try again.';
+    document.getElementById('save-status').textContent = 'Could not load that day, try again.';
   }).getAdminData(pin, iso);
 }
 
@@ -502,15 +611,14 @@ function renderPlanAssignments() {
 }
 
 function submitPlanTask() {
-  var name = document.getElementById('plan-task-name').value.trim();
+  var name = capitalizeWords_(document.getElementById('plan-task-name').value.trim());
   var dates = Object.keys(planSelectedDates);
   if (!name) { alert('Enter a task name.'); return; }
   if (!dates.length) { alert('Pick at least one date on the calendar.'); return; }
 
   document.getElementById('plan-status').textContent = 'Adding…';
   google.script.run.withSuccessHandler(function (result) {
-    var msg = 'Added to ' + result.applied.length + ' day' + (result.applied.length === 1 ? '' : 's') + '. Already saved — click any of those dates above to check it.';
-    if (result.skipped.length) msg += ' ' + result.skipped.length + ' day(s) already had 8 tasks and were skipped.';
+    var msg = 'Added to ' + result.applied.length + ' day' + (result.applied.length === 1 ? '' : 's') + '. Already saved, click any of those dates above to check it.';
     document.getElementById('plan-status').textContent = msg;
     document.getElementById('plan-task-name').value = '';
     planAssignments = {};
@@ -520,7 +628,7 @@ function submitPlanTask() {
     // refresh it so it reflects the change right away.
     if (result.applied.indexOf(currentEditorDate) !== -1) loadEditorDate(currentEditorDate);
   }).withFailureHandler(function (e) {
-    document.getElementById('plan-status').textContent = 'Could not save — ' + (e && e.message ? e.message : 'try again.');
+    document.getElementById('plan-status').textContent = 'Could not save, ' + (e && e.message ? e.message : 'try again.');
   }).planTask(pin, name, planAssignments, dates);
 }
 
@@ -533,9 +641,142 @@ function openSheet() {
     if (win) win.location = url;
   }).withFailureHandler(function () {
     if (win) win.close();
-    alert('Could not open the sheet — try again.');
+    alert('Could not open the sheet, try again.');
   }).getSheetUrl(pin);
 }
+
+// ---- Admin sub-tabs (Tasks / Payroll) ----
+
+function showAdminSubView(name) {
+  document.getElementById('adminview-tasks').classList.toggle('active', name === 'tasks');
+  document.getElementById('adminview-payroll').classList.toggle('active', name === 'payroll');
+  document.getElementById('subtab-tasks').classList.toggle('active', name === 'tasks');
+  document.getElementById('subtab-payroll').classList.toggle('active', name === 'payroll');
+  if (name === 'payroll' && !payrollLoaded) {
+    payrollLoaded = true;
+    loadWageRates_();
+    loadPayrollDay_(ymd_(startOfDay_(new Date())));
+    loadPayrollMonth_(payrollMonthIso_());
+  }
+}
+
+// ---- Payroll: hourly rates (effective-dated, per employee) ----
+
+var payrollLoaded = false;
+var wageRatesInfo = [];
+var openRateEditorId = null;
+
+function loadWageRates_() {
+  google.script.run.withSuccessHandler(function (info) {
+    wageRatesInfo = info;
+    renderRates_();
+  }).withFailureHandler(function () {
+    document.getElementById('rates-status').textContent = 'Could not load rates, try again.';
+  }).getWageRatesInfo(pin);
+}
+
+function renderRates_() {
+  var body = document.getElementById('rates-body');
+  body.innerHTML = wageRatesInfo.map(function (e) {
+    var upcomingNote = e.upcoming ? ('<div class="hint" style="margin:2px 0 0;">฿' + e.upcoming.rate + '/hr starting ' + e.upcoming.effectiveFrom + '</div>') : '';
+    var row = '<tr><td>' + e.name + '</td>' +
+      '<td>฿' + e.currentRate + '/hr' + upcomingNote + '</td>' +
+      '<td><button type="button" class="btn ghost" onclick="toggleRateEditor_(\'' + e.id + '\')">Change rate</button></td></tr>';
+    if (openRateEditorId === e.id) row += renderRateEditorRow_(e);
+    return row;
+  }).join('');
+}
+
+function renderRateEditorRow_(e) {
+  var todayIso = ymd_(startOfDay_(new Date()));
+  return '<tr class="repeat-editor-row"><td colspan="3"><div class="repeat-editor">' +
+    '<p class="hint" style="margin:0 0 8px;">New hourly rate, and the date it starts applying: today, backdated, or scheduled ahead.</p>' +
+    '<div class="buttons" style="align-items:center;">' +
+    '<input type="number" min="0" step="0.01" class="task-name-input" id="rate-input-' + e.id + '" placeholder="Rate (baht/hr)" style="width:140px;" value="' + e.currentRate + '">' +
+    '<input type="date" class="task-name-input" id="rate-date-' + e.id + '" style="width:auto;" value="' + todayIso + '">' +
+    '<button type="button" class="btn primary" onclick="submitRateChange_(\'' + e.id + '\')">Save</button>' +
+    '<button type="button" class="btn ghost" onclick="closeRateEditor_()">Cancel</button>' +
+    '</div>' +
+    '</div></td></tr>';
+}
+
+function toggleRateEditor_(id) { openRateEditorId = (openRateEditorId === id) ? null : id; renderRates_(); }
+function closeRateEditor_() { openRateEditorId = null; renderRates_(); }
+
+function submitRateChange_(id) {
+  var rate = document.getElementById('rate-input-' + id).value;
+  var effectiveFrom = document.getElementById('rate-date-' + id).value;
+  if (rate === '' || Number(rate) < 0) { alert('Enter a valid hourly rate.'); return; }
+  if (!effectiveFrom) { alert('Pick an effective date.'); return; }
+  document.getElementById('rates-status').textContent = 'Saving…';
+  google.script.run.withSuccessHandler(function (info) {
+    wageRatesInfo = info;
+    openRateEditorId = null;
+    renderRates_();
+    document.getElementById('rates-status').textContent = 'Saved.';
+    // The rate in effect today (or on the day/month currently shown) may
+    // have just changed — refresh those views too.
+    loadPayrollDay_(payrollDayIso);
+    loadPayrollMonth_(payrollMonthIso_());
+  }).withFailureHandler(function (e) {
+    document.getElementById('rates-status').textContent = 'Could not save, ' + (e && e.message ? e.message : 'try again.');
+  }).setWageRate(pin, id, rate, effectiveFrom);
+}
+
+// ---- Payroll: day view ----
+
+var payrollDayIso = null;
+
+function loadPayrollDay_(iso) {
+  payrollDayIso = iso;
+  document.getElementById('payroll-day-input').value = iso;
+  google.script.run.withSuccessHandler(function (data) {
+    document.getElementById('payroll-day-label').textContent = data.dateLabel + (data.isToday ? ' (today)' : '');
+    var body = document.getElementById('payroll-day-body');
+    if (!data.rows.length) {
+      body.innerHTML = '<tr><td colspan="4" class="hint">No one logged in this day.</td></tr>';
+      return;
+    }
+    body.innerHTML = data.rows.map(function (r) {
+      return '<tr><td>' + r.name + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td></tr>';
+    }).join('');
+  }).withFailureHandler(function () {
+    document.getElementById('payroll-day-body').innerHTML = '<tr><td colspan="4" class="hint">Could not load that day.</td></tr>';
+  }).getPayrollDay(pin, iso);
+}
+
+function payrollPrevDay() { loadPayrollDay_(shiftIso_(payrollDayIso, -1)); }
+function payrollNextDay() { loadPayrollDay_(shiftIso_(payrollDayIso, 1)); }
+function payrollGoToday() { loadPayrollDay_(ymd_(startOfDay_(new Date()))); }
+
+// ---- Payroll: month totals (browsable — not just the current month) ----
+
+var payrollMonth = new Date();
+payrollMonth.setDate(1);
+
+function payrollMonthIso_() { return payrollMonth.getFullYear() + '-' + pad2_(payrollMonth.getMonth() + 1); }
+
+function loadPayrollMonth_(monthIso) {
+  document.getElementById('payroll-month-label').textContent = payrollMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  google.script.run.withSuccessHandler(function (rows) {
+    var body = document.getElementById('payroll-month-body');
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="3" class="hint">No hours logged this month yet.</td></tr>';
+      document.getElementById('payroll-month-total').textContent = '';
+      return;
+    }
+    body.innerHTML = rows.map(function (r) {
+      return '<tr><td>' + r.name + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.pay.toFixed(2) + '</td></tr>';
+    }).join('');
+    var total = rows.reduce(function (sum, r) { return sum + r.pay; }, 0);
+    document.getElementById('payroll-month-total').textContent = 'Total: ฿' + total.toFixed(2);
+  }).withFailureHandler(function () {
+    document.getElementById('payroll-month-body').innerHTML = '<tr><td colspan="3" class="hint">Could not load this month.</td></tr>';
+  }).getPayrollForMonth(pin, monthIso);
+}
+
+function payrollPrevMonth() { payrollMonth.setMonth(payrollMonth.getMonth() - 1); loadPayrollMonth_(payrollMonthIso_()); }
+function payrollNextMonth() { payrollMonth.setMonth(payrollMonth.getMonth() + 1); loadPayrollMonth_(payrollMonthIso_()); }
 
 // ---- Employee roster ----
 
@@ -545,16 +786,17 @@ function renderEmployeeList() {
   EMPLOYEES.forEach(function (emp) {
     var tr = document.createElement('tr');
     tr.innerHTML =
-      '<td><input type="text" class="task-name-input" value="' + emp.name + '" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value)"></td>' +
+      '<td><input type="text" class="task-name-input" value="' + emp.name + '" autocapitalize="words" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value, this)"></td>' +
       '<td><button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\', \'' + emp.name.replace(/'/g, "\\'") + '\')">✕</button></td>';
     body.appendChild(tr);
   });
 }
 
 function addEmployeeFlow() {
-  if (EMPLOYEES.length >= 8) { alert('Max 8 employees — remove someone first.'); return; }
+  if (EMPLOYEES.length >= 8) { alert('Max 8 employees. Remove someone first.'); return; }
   var name = prompt("New employee's name:");
   if (!name) return;
+  name = capitalizeWords_(name);
   document.getElementById('employee-status').textContent = 'Adding…';
   google.script.run.withSuccessHandler(function (result) {
     EMPLOYEES = result.employees;
@@ -569,11 +811,13 @@ function addEmployeeFlow() {
     renderPlanAssignments();
     document.getElementById('employee-status').textContent = 'Added ' + result.name + '.';
   }).withFailureHandler(function (e) {
-    document.getElementById('employee-status').textContent = 'Could not add — ' + (e && e.message ? e.message : 'try again.');
+    document.getElementById('employee-status').textContent = 'Could not add, ' + (e && e.message ? e.message : 'try again.');
   }).addEmployee(pin, name);
 }
 
-function renameEmployeeFlow(id, newName) {
+function renameEmployeeFlow(id, newName, el) {
+  newName = capitalizeWords_(newName);
+  if (el) el.value = newName;
   document.getElementById('employee-status').textContent = 'Saving…';
   google.script.run.withSuccessHandler(function (result) {
     EMPLOYEES = result.employees;
@@ -582,7 +826,7 @@ function renameEmployeeFlow(id, newName) {
     renderPlanAssignments();
     document.getElementById('employee-status').textContent = 'Saved.';
   }).withFailureHandler(function () {
-    document.getElementById('employee-status').textContent = 'Could not rename — try again.';
+    document.getElementById('employee-status').textContent = 'Could not rename, try again.';
     renderEmployeeList();
   }).renameEmployee(pin, id, newName);
 }
@@ -598,7 +842,7 @@ function removeEmployeeFlow(id, name) {
     renderPlanAssignments();
     document.getElementById('employee-status').textContent = 'Removed ' + name + '.';
   }).withFailureHandler(function () {
-    document.getElementById('employee-status').textContent = 'Could not remove — try again.';
+    document.getElementById('employee-status').textContent = 'Could not remove, try again.';
   }).removeEmployee(pin, id);
 }
 </script>

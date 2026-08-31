@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cafe Tan90 Attendance — preview</title>
+<title>Cafe Tan90 Attendance Preview</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;700&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -158,16 +158,25 @@
   .repeat-chip.active { background: var(--navy-light); color: var(--navy); border-color: var(--navy-light); }
   .repeat-editor-row td { background: var(--muted-bg); border-bottom: 1px solid var(--border); }
   .repeat-editor { padding: 4px 0; }
+
+  .drag-handle-cell { width: 28px; padding: 10px 0 10px 8px !important; }
+  .drag-handle {
+    display: inline-block; cursor: grab; touch-action: none; user-select: none;
+    color: var(--text-secondary); font-size: 16px; line-height: 1; padding: 6px;
+  }
+  .drag-handle:active { cursor: grabbing; }
+  tr.dragging-row { opacity: 0.45; }
+  tr.drop-target td { box-shadow: inset 0 2px 0 var(--navy); }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-  <h1>Cafe Tan90 — Attendance</h1>
-  <p class="subtitle">Preview build — this is an in-browser mockup so you can see and click through the design, including switching between days. The real version runs on Google Apps Script and writes every log-in/out and task completion straight into a live Google Sheet.</p>
+  <h1>Cafe Tan90 Attendance</h1>
+  <p class="subtitle">Preview build. This is an in-browser mockup so you can see and click through the design, including switching between days. The real version runs on Google Apps Script and writes every log-in/out and task completion straight into a live Google Sheet.</p>
 
   <div class="note-box">
-    This is a design preview only — nothing here is saved anywhere once you close the tab. It fully simulates multiple days in memory (including "Plan tasks ahead" writing onto future dates), so you can click through the real flow. The production version works exactly like this but persists everything to Google Sheets. To see the fade/present/task-done flow, try logging someone in on the Staff tab, then come mark a task done.
+    This is a design preview only. Nothing here is saved anywhere once you close the tab. It fully simulates multiple days in memory (including "Plan tasks ahead" writing onto future dates), so you can click through the real flow. The production version works exactly like this but persists everything to Google Sheets. To see the fade/present/task-done flow, try logging someone in on the Staff tab, then come mark a task done.
   </div>
 
   <div class="tabs">
@@ -195,7 +204,7 @@
 
     <div class="card task-table-wrap">
       <h2>Today's tasks</h2>
-      <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in — until then it stays faded as a reminder they haven't started yet. Tap "Mark done" as each task is finished; it logs the time too.</p>
+      <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in; until then it stays faded as a reminder they haven't started yet. Tap "Mark done" as each task is finished; it logs the time too.</p>
       <table>
         <thead id="task-thead"></thead>
         <tbody id="task-body"></tbody>
@@ -214,21 +223,27 @@
       <div class="buttons" style="justify-content:center;">
         <button class="btn primary" onclick="unlockAdmin()">Unlock</button>
       </div>
-      <p class="hint" style="margin-top:14px;">Preview PIN: <b>1234</b> — in the real version you set your own PIN in the script.</p>
+      <p class="hint" style="margin-top:14px;">Preview PIN: <b>1234</b>. In the real version you set your own PIN in the script.</p>
     </div>
 
     <div id="admin-panel" style="display:none;">
+      <div class="tabs" style="margin-bottom:16px;">
+        <button type="button" class="tab-btn active" id="subtab-tasks" onclick="showAdminSubView('tasks')">Tasks</button>
+        <button type="button" class="tab-btn" id="subtab-payroll" onclick="showAdminSubView('payroll')">Payroll</button>
+      </div>
+
+    <div class="view active" id="adminview-tasks">
       <div class="card">
         <h2>This month's data</h2>
-        <p class="hint">Everything staff log gets written straight into a Google Sheet — this button opens straight to today's tab. (In this preview it's just a placeholder — it goes live once the real version is deployed.)</p>
+        <p class="hint">Everything staff log gets written straight into a Google Sheet. This button opens straight to today's tab. (In this preview it's just a placeholder; it goes live once the real version is deployed.)</p>
         <div class="buttons">
-          <button class="btn" onclick="alert('This opens the real Google Sheet once the app is deployed — nothing to click through to yet in this preview.')">Open this month's Sheet ↗</button>
+          <button class="btn" onclick="alert('This opens the real Google Sheet once the app is deployed. Nothing to click through to yet in this preview.')">Open this month's Sheet ↗</button>
         </div>
       </div>
 
       <div class="card">
         <h2>Employees</h2>
-        <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward — their past attendance history stays exactly as it was in the Sheet.</p>
+        <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet.</p>
         <table>
           <thead><tr><th>Name</th><th></th></tr></thead>
           <tbody id="employee-body"></tbody>
@@ -240,7 +255,7 @@
 
       <div class="card" id="tasks-card">
         <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-          <h2 style="margin:0;">Tasks for <span id="editor-date-label">—</span></h2>
+          <h2 style="margin:0;">Tasks for <span id="editor-date-label">-</span></h2>
           <div class="buttons" style="margin:0;">
             <button class="btn ghost" onclick="editorPrevDay()">‹ Prev day</button>
             <button class="btn ghost" onclick="editorGoToday()">Today</button>
@@ -248,7 +263,7 @@
             <input type="date" id="editor-date-input" onchange="loadEditorDateGuarded_(this.value)" class="task-name-input" style="width:auto;">
           </div>
         </div>
-        <p class="hint">Add each task once, then tick who's doing it. Use "Repeats" on a task to make it repeat automatically on chosen days of the week (e.g. "Make base milk" every Mon–Fri) — no need to re-add it each day. Jump to any date with the picker above, including anything planned ahead, to view, edit, or delete it — not just today. <b>Nothing here is saved until you click "Save tasks" below</b> — that one click also applies any Repeats changes you made.</p>
+        <p class="hint">Click <b>+ Add task</b> below to add a row, type its name, and tick who's doing it. Each row has a small <b>Repeats</b> button next to its name, it says "One-time" until you set it. Click it and tick the days of the week you want that task to happen on, for example Mon-Fri for "Make base milk", then it shows up on those days automatically, with no need to re-add it. Jump to any date with the picker above, including anything planned ahead, to view, edit, or delete it, not just today. <b>Nothing here is saved until you click "Save tasks" below.</b> That one click also applies any Repeats changes you made.</p>
         <table>
           <thead id="admin-thead"></thead>
           <tbody id="admin-body"></tbody>
@@ -263,7 +278,7 @@
 
       <div class="card">
         <h2>Plan tasks ahead</h2>
-        <p class="hint">For one-off or short-run tasks — set one up once and apply it to a whole week or month at a time. Dates with a small dot already have tasks on them; <b>click any date to see what's on it</b> (or to jump there and edit). Tick dates below (or use the shortcuts), add who's doing it, then click "Add task to selected dates" — that click saves it immediately, there's no separate save step for this card.</p>
+        <p class="hint">For one-off or short-run tasks: set one up once and apply it to a whole week or month at a time. Dates with a small dot already have tasks on them; <b>click any date to see what's on it</b> (or to jump there and edit). Tick dates below, add who's doing it, then click "Add task to selected dates". That click saves it immediately, there's no separate save step for this card.</p>
 
         <div class="plan-calendar">
           <div class="cal-nav">
@@ -276,7 +291,7 @@
 
         <div class="plan-preview" id="plan-preview" style="display:none;">
           <div class="plan-preview-head">
-            <b id="plan-preview-date">—</b>
+            <b id="plan-preview-date">-</b>
             <button type="button" class="btn ghost btn-small" onclick="closePlanPreview()">✕</button>
           </div>
           <div id="plan-preview-body"></div>
@@ -294,13 +309,59 @@
         </div>
         <p class="hint" id="plan-selected-count" style="margin-top:8px; text-align:center;">0 dates selected</p>
 
-        <input type="text" id="plan-task-name" class="task-name-input" placeholder="Task name" style="margin-top:14px;">
+        <input type="text" id="plan-task-name" class="task-name-input" placeholder="Task name" autocapitalize="words" style="margin-top:14px;">
         <div class="plan-assignments" id="plan-assignments"></div>
 
         <div class="buttons">
           <button class="btn primary" onclick="submitPlanTask()">Add task to selected dates</button>
         </div>
         <p class="hint" id="plan-status" style="margin-top:10px;"></p>
+      </div>
+    </div>
+
+    <div class="view" id="adminview-payroll">
+      <div class="card">
+        <h2>Hourly rates</h2>
+        <p class="hint">Set what each person earns per hour. A rate change can start today, be backdated, or be scheduled for a future date, so past pay never silently changes unless you mean it to.</p>
+        <table>
+          <thead><tr><th>Name</th><th>Current rate</th><th></th></tr></thead>
+          <tbody id="rates-body"></tbody>
+        </table>
+        <p class="hint" id="rates-status" style="margin-top:10px;"></p>
+      </div>
+
+      <div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+          <h2 style="margin:0;">Payroll for <span id="payroll-day-label">-</span></h2>
+          <div class="buttons" style="margin:0;">
+            <button class="btn ghost" onclick="payrollPrevDay()">‹ Prev day</button>
+            <button class="btn ghost" onclick="payrollGoToday()">Today</button>
+            <button class="btn ghost" onclick="payrollNextDay()">Next day ›</button>
+            <input type="date" id="payroll-day-input" onchange="loadPayrollDay_(this.value)" class="task-name-input" style="width:auto;">
+          </div>
+        </div>
+        <p class="hint">Hours are exact to the minute, not rounded to a quarter hour, computed from actual log in/out times and paid at whatever rate applied that day.</p>
+        <table>
+          <thead><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead>
+          <tbody id="payroll-day-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+          <h2 style="margin:0;">Month totals</h2>
+          <div class="cal-nav" style="margin:0; gap:10px;">
+            <button type="button" class="btn ghost" onclick="payrollPrevMonth()">‹</button>
+            <span id="payroll-month-label">-</span>
+            <button type="button" class="btn ghost" onclick="payrollNextMonth()">›</button>
+          </div>
+        </div>
+        <p class="hint">Running total for the month so far. Once the month ends, this number is the final total, nothing extra to do. Use the arrows above to look back at past months.</p>
+        <table>
+          <thead><tr><th>Name</th><th>Hours</th><th>Pay</th></tr></thead>
+          <tbody id="payroll-month-body"></tbody>
+        </table>
+        <p class="hint" id="payroll-month-total" style="margin-top:10px; text-align:right; font-weight:600;"></p>
       </div>
     </div>
 
@@ -330,7 +391,8 @@ var state = {
   ],
   // completions[employeeId][taskIndex] = "HH:MM:SS" once marked done (today's task table only)
   completions: { MIW: {}, NUREEN: {}, RICHA: {} },
-  days: {} // 'yyyy-MM-dd' -> { tasks: [{name, assignments}] }
+  days: {}, // 'yyyy-MM-dd' -> { tasks: [{name, assignments}] }
+  wageRates: {} // employeeId -> [{effectiveFrom: 'yyyy-MM-dd', rate}, ...]
 };
 var standingSeq = 3;
 var employeeSeq = 4;
@@ -404,7 +466,6 @@ function resyncStandingIntoDays_() {
     state.standingTasks.forEach(function (st) {
       if (st.days.indexOf(weekday) === -1) return;
       if (existingNames.indexOf(st.name.trim().toLowerCase()) !== -1) return;
-      if (day.tasks.length >= 8) return;
       day.tasks.push({ name: st.name, assignments: copyObj_(st.assignments) });
       existingNames.push(st.name.trim().toLowerCase());
     });
@@ -522,6 +583,172 @@ function unlockAdmin() {
   }
 }
 
+// ---- Admin sub-tabs (Tasks / Payroll) ----
+
+function showAdminSubView(name) {
+  document.getElementById('adminview-tasks').classList.toggle('active', name === 'tasks');
+  document.getElementById('adminview-payroll').classList.toggle('active', name === 'payroll');
+  document.getElementById('subtab-tasks').classList.toggle('active', name === 'tasks');
+  document.getElementById('subtab-payroll').classList.toggle('active', name === 'payroll');
+  if (name === 'payroll' && !payrollLoaded) {
+    payrollLoaded = true;
+    loadWageRates_();
+    loadPayrollDay_(ymd_(startOfDay_(new Date())));
+    loadPayrollMonth_(payrollMonthIso_());
+  }
+}
+
+// ---- Payroll — mock backend + UI. Mirrors Code.gs's real logic (rate
+// history by effective date, hours computed from log in/out, totaled by
+// employee, never rounded to a quarter hour) closely enough to demo the
+// flow; today's hours come from the real interactive Staff-tab state above,
+// other days use a small deterministic (not random-each-render) placeholder
+// so the demo looks plausible without a full fake spreadsheet behind it. ----
+
+var payrollLoaded = false;
+var wageRatesInfo = [];
+var openRateEditorId = null;
+var payrollDayIso = null;
+var payrollMonth = new Date();
+payrollMonth.setDate(1);
+
+function timeStrToMinutes_(t) { var p = t.split(':').map(Number); return p[0] * 60 + p[1] + p[2] / 60; }
+function hoursFromTimes_(inStr, outStr) {
+  if (!inStr || !outStr) return 0;
+  var mins = timeStrToMinutes_(outStr) - timeStrToMinutes_(inStr);
+  return mins > 0 ? mins / 60 : 0;
+}
+function formatHoursMins_(hoursDecimal) {
+  var totalMin = Math.round(hoursDecimal * 60);
+  var hh = Math.floor(totalMin / 60);
+  var mm = totalMin % 60;
+  return hh + 'h ' + (mm < 10 ? '0' + mm : String(mm)) + 'm';
+}
+// Deterministic stand-in for a non-today day's hours, so the demo has
+// something to show in the day-navigator and month-total views without a
+// full fake spreadsheet of historical attendance behind it.
+function demoHoursForDay_(iso, empId) {
+  var d = parseIso_(iso);
+  if (d.getDay() === 0 || d.getDay() === 6) return 0; // closed-ish on weekends for the demo
+  var seed = (iso + empId).split('').reduce(function (a, c) { return a + c.charCodeAt(0); }, 0);
+  return 6.5 + (seed % 21) / 10; // 6.5-8.5 hrs, stable across re-renders
+}
+function getRateForEmployeeOnDate_(empId, dateIso) {
+  var history = state.wageRates[empId] || [];
+  var applicable = 40;
+  var best = null;
+  history.forEach(function (entry) { if (entry.effectiveFrom <= dateIso && (!best || entry.effectiveFrom > best.effectiveFrom)) best = entry; });
+  if (best) applicable = best.rate;
+  return applicable;
+}
+
+function loadWageRates_() {
+  var todayIso = ymd_(startOfDay_(new Date()));
+  wageRatesInfo = state.employees.map(function (e) {
+    var history = (state.wageRates[e.id] || []).slice().sort(function (a, b) { return a.effectiveFrom < b.effectiveFrom ? -1 : 1; });
+    var upcoming = history.filter(function (h) { return h.effectiveFrom > todayIso; });
+    return { id: e.id, name: e.name, currentRate: getRateForEmployeeOnDate_(e.id, todayIso), upcoming: upcoming.length ? upcoming[0] : null };
+  });
+  renderRates_();
+}
+
+function renderRates_() {
+  var body = document.getElementById('rates-body');
+  body.innerHTML = wageRatesInfo.map(function (e) {
+    var upcomingNote = e.upcoming ? ('<div class="hint" style="margin:2px 0 0;">฿' + e.upcoming.rate + '/hr starting ' + e.upcoming.effectiveFrom + '</div>') : '';
+    var row = '<tr><td>' + e.name + '</td>' +
+      '<td>฿' + e.currentRate + '/hr' + upcomingNote + '</td>' +
+      '<td><button type="button" class="btn ghost" onclick="toggleRateEditor_(\'' + e.id + '\')">Change rate</button></td></tr>';
+    if (openRateEditorId === e.id) row += renderRateEditorRow_(e);
+    return row;
+  }).join('');
+}
+
+function renderRateEditorRow_(e) {
+  var todayIso = ymd_(startOfDay_(new Date()));
+  return '<tr class="repeat-editor-row"><td colspan="3"><div class="repeat-editor">' +
+    '<p class="hint" style="margin:0 0 8px;">New hourly rate, and the date it starts applying: today, backdated, or scheduled ahead.</p>' +
+    '<div class="buttons" style="align-items:center;">' +
+    '<input type="number" min="0" step="0.01" class="task-name-input" id="rate-input-' + e.id + '" placeholder="Rate (baht/hr)" style="width:140px;" value="' + e.currentRate + '">' +
+    '<input type="date" class="task-name-input" id="rate-date-' + e.id + '" style="width:auto;" value="' + todayIso + '">' +
+    '<button type="button" class="btn primary" onclick="submitRateChange_(\'' + e.id + '\')">Save</button>' +
+    '<button type="button" class="btn ghost" onclick="closeRateEditor_()">Cancel</button>' +
+    '</div>' +
+    '</div></td></tr>';
+}
+
+function toggleRateEditor_(id) { openRateEditorId = (openRateEditorId === id) ? null : id; renderRates_(); }
+function closeRateEditor_() { openRateEditorId = null; renderRates_(); }
+
+function submitRateChange_(id) {
+  var rate = document.getElementById('rate-input-' + id).value;
+  var effectiveFrom = document.getElementById('rate-date-' + id).value;
+  if (rate === '' || Number(rate) < 0) { alert('Enter a valid hourly rate.'); return; }
+  if (!effectiveFrom) { alert('Pick an effective date.'); return; }
+  var list = state.wageRates[id] || [];
+  var idx = list.findIndex(function (x) { return x.effectiveFrom === effectiveFrom; });
+  var entry = { effectiveFrom: effectiveFrom, rate: Number(rate) };
+  if (idx !== -1) list[idx] = entry; else list.push(entry);
+  state.wageRates[id] = list;
+  openRateEditorId = null;
+  loadWageRates_();
+  document.getElementById('rates-status').textContent = 'Saved.';
+  loadPayrollDay_(payrollDayIso);
+  loadPayrollMonth_(payrollMonthIso_());
+}
+
+function loadPayrollDay_(iso) {
+  payrollDayIso = iso;
+  document.getElementById('payroll-day-input').value = iso;
+  var todayIso = ymd_(startOfDay_(new Date()));
+  var isToday = iso === todayIso;
+  document.getElementById('payroll-day-label').textContent = formatDateLabel_(parseIso_(iso)) + (isToday ? ' (today)' : '');
+  var rows = state.employees.map(function (emp) {
+    var hours = isToday ? hoursFromTimes_(emp.loginTime, emp.logoutTime) : demoHoursForDay_(iso, emp.id);
+    var rate = getRateForEmployeeOnDate_(emp.id, iso);
+    return { name: emp.name, hoursLabel: formatHoursMins_(hours), rate: rate, pay: Math.round(hours * rate * 100) / 100 };
+  });
+  var body = document.getElementById('payroll-day-body');
+  body.innerHTML = rows.map(function (r) {
+    return '<tr><td>' + r.name + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td></tr>';
+  }).join('');
+}
+
+function payrollPrevDay() { loadPayrollDay_(shiftIso_(payrollDayIso, -1)); }
+function payrollNextDay() { loadPayrollDay_(shiftIso_(payrollDayIso, 1)); }
+function payrollGoToday() { loadPayrollDay_(ymd_(startOfDay_(new Date()))); }
+
+function payrollMonthIso_() { return payrollMonth.getFullYear() + '-' + pad2_(payrollMonth.getMonth() + 1); }
+
+function loadPayrollMonth_(monthIso) {
+  document.getElementById('payroll-month-label').textContent = payrollMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  var parts = monthIso.split('-').map(Number);
+  var daysInMo = new Date(parts[0], parts[1], 0).getDate();
+  var todayIso = ymd_(startOfDay_(new Date()));
+  var totals = state.employees.map(function (e) { return { name: e.name, hours: 0, pay: 0 }; });
+
+  for (var day = 1; day <= daysInMo; day++) {
+    var iso = parts[0] + '-' + pad2_(parts[1]) + '-' + pad2_(day);
+    if (iso > todayIso) continue; // future days: nobody's logged in yet, same as the real app
+    state.employees.forEach(function (emp, i) {
+      var hours = (iso === todayIso) ? hoursFromTimes_(emp.loginTime, emp.logoutTime) : demoHoursForDay_(iso, emp.id);
+      var rate = getRateForEmployeeOnDate_(emp.id, iso);
+      totals[i].hours += hours;
+      totals[i].pay += hours * rate;
+    });
+  }
+
+  var body = document.getElementById('payroll-month-body');
+  body.innerHTML = totals.map(function (t) {
+    return '<tr><td>' + t.name + '</td><td>' + formatHoursMins_(t.hours) + '</td><td>฿' + t.pay.toFixed(2) + '</td></tr>';
+  }).join('');
+  var grandTotal = totals.reduce(function (sum, t) { return sum + t.pay; }, 0);
+  document.getElementById('payroll-month-total').textContent = 'Total: ฿' + grandTotal.toFixed(2);
+}
+
+function payrollPrevMonth() { payrollMonth.setMonth(payrollMonth.getMonth() - 1); loadPayrollMonth_(payrollMonthIso_()); }
+function payrollNextMonth() { payrollMonth.setMonth(payrollMonth.getMonth() + 1); loadPayrollMonth_(payrollMonthIso_()); }
+
 // ---- Tasks for [date] — unified task list with per-row "Repeats" ----
 
 var EMPLOYEES = [];
@@ -538,6 +765,12 @@ var STANDING_DAYS = [
 function prepTasksClientState_(list) {
   list.forEach(function (t) { t.repeatDays = t.standing ? t.standing.days.slice() : []; t._loadedName = t.name; });
   return list;
+}
+
+// Capitalizes the first letter of each word — applied to task names and
+// employee names (never the PIN), same as Admin.html.
+function capitalizeWords_(s) {
+  return (s || '').replace(/(^|\s)([a-z])/g, function (m, sep, ch) { return sep + ch.toUpperCase(); });
 }
 
 function applyAdminData_(data) {
@@ -562,20 +795,22 @@ function repeatsChipLabel_(days) {
 
 function renderAdmin() {
   var thead = document.getElementById('admin-thead');
-  thead.innerHTML = '<tr><th>Task</th><th>Repeats</th>' + EMPLOYEES.map(function (e) { return '<th class="task-col">' + e.name + '</th>'; }).join('') + '<th></th></tr>';
+  thead.innerHTML = '<tr><th></th><th>Task</th><th>Repeats</th>' + EMPLOYEES.map(function (e) { return '<th class="task-col">' + e.name + '</th>'; }).join('') + '<th></th></tr>';
   var body = document.getElementById('admin-body');
   body.innerHTML = '';
-  var totalCols = EMPLOYEES.length + 3;
+  var totalCols = EMPLOYEES.length + 4;
 
   tasks.forEach(function (t, ti) {
     var tr = document.createElement('tr');
+    tr.setAttribute('data-ti', ti);
     var checks = EMPLOYEES.map(function (emp) {
       var checked = t.assignments[emp.id] ? 'checked' : '';
       return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + emp.id + '\',this.checked)"></td>';
     }).join('');
     var chipCls = 'repeat-chip' + (t.repeatDays && t.repeatDays.length ? ' active' : '');
     tr.innerHTML =
-      '<td><input type="text" class="task-name-input" value="' + t.name + '" onchange="renameTask(' + ti + ',this.value)"></td>' +
+      '<td class="drag-handle-cell"><span class="drag-handle" onpointerdown="taskRowDragStart_(event,' + ti + ')" onpointermove="taskRowDragMove_(event)" onpointerup="taskRowDragEnd_(event)" onpointercancel="taskRowDragEnd_(event)">≡</span></td>' +
+      '<td><input type="text" class="task-name-input" value="' + t.name + '" autocapitalize="words" onchange="renameTask(' + ti + ',this.value,this)"></td>' +
       '<td><button type="button" class="' + chipCls + '" onclick="toggleRepeatEditor(' + ti + ')">' + repeatsChipLabel_(t.repeatDays) + '</button></td>' +
       checks +
       '<td><button class="btn ghost" onclick="removeTask(' + ti + ')">✕</button></td>';
@@ -590,10 +825,11 @@ function renderAdmin() {
           ' onchange="toggleRepeatDay(' + ti + ',' + d.v + ',this.checked)"> ' + d.l + '</label>';
       }).join('');
       editorTr.innerHTML = '<td colspan="' + totalCols + '"><div class="repeat-editor">' +
-        '<p class="hint" style="margin:0 0 8px;">Repeats on:</p>' +
+        '<p class="hint" style="margin:0 0 8px;">Repeats on: (or use a shortcut below)</p>' +
         '<div class="plan-assignments">' + dayBoxes + '</div>' +
         '<div class="buttons" style="margin-top:10px;">' +
-        '<button type="button" class="btn ghost" onclick="clearRepeatDays(' + ti + ')">Make one-time</button>' +
+        '<button type="button" class="btn ghost" onclick="setRepeatPreset_(' + ti + ',\'weekdays\')">Weekdays</button>' +
+        '<button type="button" class="btn ghost" onclick="setRepeatPreset_(' + ti + ',\'daily\')">Daily</button>' +
         '<button type="button" class="btn primary" onclick="closeRepeatEditor()">Done</button>' +
         '</div>' +
         '<p class="hint" style="margin-top:6px;">Applies when you click "Save tasks" below.</p>' +
@@ -604,8 +840,51 @@ function renderAdmin() {
 }
 
 function toggleAssign(ti, empId, val) { tasks[ti].assignments[empId] = val; tasksDirty = true; }
-function renameTask(ti, val) { tasks[ti].name = val; tasksDirty = true; }
+function renameTask(ti, val, el) {
+  var v = capitalizeWords_(val);
+  tasks[ti].name = v;
+  if (el) el.value = v;
+  tasksDirty = true;
+}
 function removeTask(ti) { tasks.splice(ti, 1); openRepeatEditorIndex = -1; tasksDirty = true; renderAdmin(); }
+
+// ---- Drag-to-reorder (Pointer Events — same approach as Admin.html) ----
+
+var dragState = null;
+
+function taskRowDragStart_(e, ti) {
+  e.preventDefault();
+  dragState = { fromIndex: ti };
+  var handle = e.currentTarget;
+  try { handle.setPointerCapture(e.pointerId); } catch (err) { /* older browsers — drag still works, just without capture */ }
+  var tr = handle.closest('tr');
+  if (tr) tr.classList.add('dragging-row');
+}
+
+function taskRowDragMove_(e) {
+  if (!dragState) return;
+  var rows = document.querySelectorAll('#admin-body tr.drop-target');
+  for (var i = 0; i < rows.length; i++) rows[i].classList.remove('drop-target');
+  var target = document.elementFromPoint(e.clientX, e.clientY);
+  var tr = target && target.closest ? target.closest('tr[data-ti]') : null;
+  if (tr) tr.classList.add('drop-target');
+}
+
+function taskRowDragEnd_(e) {
+  if (!dragState) return;
+  var target = document.elementFromPoint(e.clientX, e.clientY);
+  var tr = target && target.closest ? target.closest('tr[data-ti]') : null;
+  var fromIndex = dragState.fromIndex;
+  var toIndex = tr ? Number(tr.getAttribute('data-ti')) : null;
+  dragState = null;
+  if (toIndex !== null && toIndex !== fromIndex) {
+    var moved = tasks.splice(fromIndex, 1)[0];
+    tasks.splice(toIndex, 0, moved);
+    tasksDirty = true;
+    openRepeatEditorIndex = -1;
+  }
+  renderAdmin();
+}
 
 function toggleRepeatEditor(ti) { openRepeatEditorIndex = (openRepeatEditorIndex === ti) ? -1 : ti; renderAdmin(); }
 function closeRepeatEditor() { openRepeatEditorIndex = -1; renderAdmin(); }
@@ -620,15 +899,13 @@ function toggleRepeatDay(ti, day, checked) {
   renderAdmin();
 }
 
-function clearRepeatDays(ti) {
-  tasks[ti].repeatDays = [];
+function setRepeatPreset_(ti, preset) {
+  tasks[ti].repeatDays = preset === 'daily' ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5];
   tasksDirty = true;
-  openRepeatEditorIndex = -1;
   renderAdmin();
 }
 
 function addTaskRow() {
-  if (tasks.length >= 8) { alert('Max 8 tasks per day.'); return; }
   var blank = {};
   EMPLOYEES.forEach(function (e) { blank[e.id] = false; });
   tasks.push({ name: 'New task', assignments: blank, standing: null, repeatDays: [] });
@@ -645,7 +922,7 @@ function copyPreviousDay() {
   openRepeatEditorIndex = -1;
   tasksDirty = true;
   renderAdmin();
-  document.getElementById('save-status').textContent = 'Copied from the previous day — click Save tasks to apply.';
+  document.getElementById('save-status').textContent = 'Copied from the previous day. Click Save tasks to apply.';
 }
 
 function computeStandingChanges_() {
@@ -847,33 +1124,28 @@ function renderPlanAssignments() {
   }).join('');
 }
 
-// Mirrors planTask() in Code.gs: merge into an existing same-named column
-// (OR-ing assignments in) or use the first free column, else skip.
+// Mirrors planTask() in Code.gs: merge into an existing same-named task
+// (OR-ing assignments in), or append a new one — no cap to skip against.
 function submitPlanTask() {
-  var name = document.getElementById('plan-task-name').value.trim();
+  var name = capitalizeWords_(document.getElementById('plan-task-name').value.trim());
   var dates = Object.keys(planSelectedDates);
   if (!name) { alert('Enter a task name.'); return; }
   if (!dates.length) { alert('Pick at least one date on the calendar.'); return; }
 
   var applied = [];
-  var skipped = [];
   dates.forEach(function (iso) {
     var day = getDay_(iso);
     var existing = day.tasks.find(function (t) { return t.name.trim().toLowerCase() === name.toLowerCase(); });
     if (existing) {
       state.employees.forEach(function (e) { if (planAssignments[e.id]) existing.assignments[e.id] = true; });
-      applied.push(iso);
-    } else if (day.tasks.length < 8) {
+    } else {
       var blank = {}; state.employees.forEach(function (e) { blank[e.id] = !!planAssignments[e.id]; });
       day.tasks.push({ name: name, assignments: blank });
-      applied.push(iso);
-    } else {
-      skipped.push(iso);
     }
+    applied.push(iso);
   });
 
-  var msg = 'Added to ' + applied.length + ' day' + (applied.length === 1 ? '' : 's') + '. Already saved — click any of those dates above to check it.';
-  if (skipped.length) msg += ' ' + skipped.length + ' day(s) already had 8 tasks and were skipped.';
+  var msg = 'Added to ' + applied.length + ' day' + (applied.length === 1 ? '' : 's') + '. Already saved, click any of those dates above to check it.';
   document.getElementById('plan-status').textContent = msg;
   document.getElementById('plan-task-name').value = '';
   planAssignments = {};
@@ -891,16 +1163,17 @@ function renderEmployeeList() {
   state.employees.forEach(function (emp) {
     var tr = document.createElement('tr');
     tr.innerHTML =
-      '<td><input type="text" class="task-name-input" value="' + emp.name + '" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value)"></td>' +
+      '<td><input type="text" class="task-name-input" value="' + emp.name + '" autocapitalize="words" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value, this)"></td>' +
       '<td><button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\')">✕</button></td>';
     body.appendChild(tr);
   });
 }
 
 function addEmployeeFlow() {
-  if (state.employees.length >= 8) { alert('Preview caps this at 8 employees — remove someone first.'); return; }
+  if (state.employees.length >= 8) { alert('Preview caps this at 8 employees. Remove someone first.'); return; }
   var name = prompt("New employee's name:");
   if (!name) return;
+  name = capitalizeWords_(name);
   var id = 'EMP' + (employeeSeq++);
   state.employees.push({ id: id, name: name, loginTime: null, logoutTime: null, present: false });
   state.completions[id] = {};
@@ -914,12 +1187,13 @@ function addEmployeeFlow() {
   renderStaff();
 }
 
-function renameEmployeeFlow(id, newName) {
-  newName = (newName || '').trim();
+function renameEmployeeFlow(id, newName, el) {
+  newName = capitalizeWords_((newName || '').trim());
   var emp = state.employees.find(function (e) { return e.id === id; });
   if (!emp) return;
   if (!newName) { renderEmployeeList(); return; }
   emp.name = newName;
+  if (el) el.value = newName;
   renderAdmin();
   renderEmployeeList();
   renderPlanAssignments();

@@ -20,39 +20,66 @@
  *
  * Employees are stored as up to MAX_EMPLOYEES "slots" (Script Properties, not
  * hardcoded), so the admin can add/rename/remove staff without editing code.
- * Each slot has a fixed row position on every day tab — adding someone just
- * activates a free slot, removing someone deactivates theirs. Nothing is ever
- * deleted from the Sheet, so past attendance history is never touched.
+ * Each slot has a fixed column position on every day tab's task table (and a
+ * fixed row on the attendance table) — adding someone just activates a free
+ * slot, removing someone deactivates theirs. Nothing is ever deleted from the
+ * Sheet, so past attendance history is never touched.
+ *
+ * Tasks, on the other hand, are stored as ROWS, not columns — one row per
+ * task, growing downward with no fixed end. That's what makes the number of
+ * tasks on a given day effectively unlimited instead of capped at a fixed
+ * column count. (There's still one internal soft ceiling — see
+ * TASK_ROW_SCAN_WINDOW below — but it's set far past anything a small cafe
+ * would ever hit; it's an implementation detail, not a user-facing limit.)
  */
 
 // ---- Configuration ----------------------------------------------------
 
 var TIMEZONE = 'Asia/Bangkok';
 var DRIVE_FOLDER_NAME = 'Cafe Tan90 Attendance Sheets';
-var MAX_TASK_COLUMNS = 8;  // task columns C..J on the day tab
-var MAX_EMPLOYEES = 8;     // employee row-slots per table on the day tab
+var MAX_EMPLOYEES = 8;     // employee row-slots (Table 1) / column-slots (Table 2) per day tab
 var EMPLOYEES_PROP_KEY = 'EMPLOYEES_V1';
 var STANDING_TASKS_PROP_KEY = 'STANDING_TASKS_V1';
-var MAX_STANDING_TASKS = 6; // recurring tasks share the same 8 task columns as one-off/planned tasks
+var WAGE_RATES_PROP_KEY = 'WAGE_RATES_V1';
+var DEFAULT_WAGE_RATE = 40; // baht/hour, used until an admin sets a rate for someone
+
+// How far down column A the script will look for task rows on a single day
+// tab. Generous on purpose — a normal day has a handful of tasks — so this
+// is a bookkeeping detail, not a task-count limit. If a day ever genuinely
+// needs more than this many tasks (very unlikely for a small team), raise
+// this number.
+var TASK_ROW_SCAN_WINDOW = 400;
 
 // Change this once you deploy (or set an Admin PIN via
 // Project Settings > Script Properties > ADMIN_PIN so you don't have to edit code).
 var DEFAULT_ADMIN_PIN = '2468';
 
-// ---- Sheet row layout (computed from MAX_EMPLOYEES / MAX_TASK_COLUMNS) ----
+// ---- Sheet layout -------------------------------------------------------
+//
+// Table 1 (Attendance): one row per employee slot (fixed, MAX_EMPLOYEES).
+//   Columns: A Name, B Log In Time, C Log Out Time, D Hours Worked, E Present Today.
+//
+// Table 2 (Tasks): one row per TASK (unbounded — nothing else lives below it
+//   on the sheet). Two header rows: row 1 has the task-name label plus each
+//   employee's name (merged across a pair of columns); row 2 sub-labels each
+//   half of that pair "Assigned" / "Done at". Then task rows start and just
+//   keep going as needed. Column A is the task name; each employee slot i
+//   gets columns taskAssignedCol_(i) (checkbox) and taskDoneCol_(i) (time).
 
 var TABLE1_HEADER_ROW = 3;
 var TABLE1_START_ROW = 4;
 var TABLE1_END_ROW = TABLE1_START_ROW + MAX_EMPLOYEES - 1;
+var TABLE1_COLS = 5; // Name, Log In, Log Out, Hours, Present Today
 
 var TABLE2_HEADER_ROW = TABLE1_END_ROW + 2; // one blank row between tables
-var TABLE2_START_ROW = TABLE2_HEADER_ROW + 1;
-var TABLE2_END_ROW = TABLE2_START_ROW + MAX_EMPLOYEES - 1;
+var TABLE2_SUBHEADER_ROW = TABLE2_HEADER_ROW + 1;
+var TABLE2_TASKS_START_ROW = TABLE2_SUBHEADER_ROW + 1;
+var TABLE2_NAME_COL = 1;
+var TABLE2_FIRST_EMP_COL = 2; // each employee slot uses a pair of columns starting here
+var TABLE2_NUM_COLS = TABLE2_FIRST_EMP_COL - 1 + MAX_EMPLOYEES * 2; // name col + 2 per employee
 
-var TABLE3_LABEL_ROW = TABLE2_END_ROW + 2;
-var TABLE3_HEADER_ROW = TABLE3_LABEL_ROW + 1;
-var TABLE3_START_ROW = TABLE3_HEADER_ROW + 1;
-var TABLE3_END_ROW = TABLE3_START_ROW + MAX_EMPLOYEES - 1;
+function taskAssignedCol_(slotIdx) { return TABLE2_FIRST_EMP_COL + slotIdx * 2; }
+function taskDoneCol_(slotIdx) { return taskAssignedCol_(slotIdx) + 1; }
 
 // ---- Web app entry point ----------------------------------------------
 
@@ -85,8 +112,9 @@ function defaultEmployeeSlots_() {
 }
 
 // Always returns exactly MAX_EMPLOYEES slots, in a fixed order that never
-// changes — slot position is what ties a person to their row on the sheet,
-// so slots are only ever edited in place (name/active), never reordered.
+// changes — slot position is what ties a person to their row/columns on the
+// sheet, so slots are only ever edited in place (name/active), never
+// reordered.
 function getAllEmployeeSlots_() {
   var props = PropertiesService.getScriptProperties();
   var raw = props.getProperty(EMPLOYEES_PROP_KEY);
@@ -106,7 +134,7 @@ function saveEmployeeSlots_(slots) {
 }
 
 // Active employees only, each carrying its slot index (needed to compute
-// which physical row it lives on).
+// which physical row/columns it lives on).
 function getActiveEmployeesWithIndex_() {
   var slots = getAllEmployeeSlots_();
   var result = [];
@@ -121,7 +149,10 @@ function getActiveEmployeesWithIndex_() {
 // week — e.g. "Make base milk" every Mon-Fri — with no admin action needed
 // once it's set up. { id, name, days: [0=Sun..6=Sat, ...], assignments:
 // { employeeId: bool }, active }. Stored the same way as the employee roster
-// (Script Properties), so it survives redeploys.
+// (Script Properties), so it survives redeploys. No cap on how many standing
+// tasks can exist — that used to be limited because standing and one-off
+// tasks shared a fixed set of day columns; now that tasks are rows, there's
+// nothing to share.
 
 function getAllStandingTasks_() {
   var raw = PropertiesService.getScriptProperties().getProperty(STANDING_TASKS_PROP_KEY);
@@ -144,39 +175,31 @@ function getActiveStandingTasksForWeekday_(weekday) {
   });
 }
 
-// Idempotent: fills in any standing task that applies to this date's weekday
-// and isn't already on the sheet by name. Never overwrites a task that's
-// already there (whether it was seeded earlier or hand-edited for this one
-// day), so a per-day tweak never gets clobbered by a later resync.
+// Idempotent: appends a row for any standing task that applies to this
+// date's weekday and isn't already on the sheet by name. Never overwrites a
+// task that's already there (whether it was seeded earlier or hand-edited
+// for this one day), so a per-day tweak never gets clobbered by a later
+// resync. No column limit to run out of anymore — it just adds a row.
 function applyStandingTasksToSheet_(sheet, date) {
   var standing = getActiveStandingTasksForWeekday_(date.getDay());
   if (!standing.length) return;
 
   var slots = getAllEmployeeSlots_();
-  var headerRow = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
-  var changed = false;
+  var taskRows = readTaskRows_(sheet);
+  var existingNames = taskRows.names.map(function (n) { return String(n).trim().toLowerCase(); });
+  var nextRow = TABLE2_TASKS_START_ROW + taskRows.count;
 
   standing.forEach(function (st) {
-    var exists = headerRow.some(function (h) { return h && String(h).trim().toLowerCase() === st.name.toLowerCase(); });
-    if (exists) return;
+    var key = st.name.trim().toLowerCase();
+    if (existingNames.indexOf(key) !== -1) return; // already on this day, don't duplicate
 
-    var col = -1;
-    for (var c = 0; c < MAX_TASK_COLUMNS; c++) { if (!headerRow[c]) { col = c; break; } }
-    if (col === -1) return; // day already has 8 tasks — best-effort, silently skipped
-
-    headerRow[col] = st.name;
-    changed = true;
-    var colValues = [];
-    for (var r = 0; r < MAX_EMPLOYEES; r++) {
-      colValues.push([!!(st.assignments && st.assignments[slots[r].id])]);
-    }
-    sheet.getRange(TABLE2_START_ROW, 3 + col, MAX_EMPLOYEES, 1).setValues(colValues);
+    sheet.getRange(nextRow, TABLE2_NAME_COL).setValue(st.name);
+    slots.forEach(function (slot, i) {
+      sheet.getRange(nextRow, taskAssignedCol_(i)).setValue(!!(st.assignments && st.assignments[slot.id]));
+    });
+    existingNames.push(key);
+    nextRow++;
   });
-
-  if (changed) {
-    sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
-    sheet.getRange(TABLE3_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
-  }
 }
 
 // After a standing task is added or edited, push it onto today's tab and
@@ -264,31 +287,33 @@ function ensureDaySheet(ss, date) {
   sheet.getRange('A1').setValue(title).setFontWeight('bold').setFontSize(13).setFontColor('#1F3864');
 
   var slots = getAllEmployeeSlots_();
-  var names = slots.map(function (s) { return [s.active ? s.name : '']; });
+  var names = slots.map(function (s) { return s.active ? s.name : ''; });
 
-  // Table 1: attendance log
-  sheet.getRange(TABLE1_HEADER_ROW, 1, 1, 4).setValues([['Name', 'Log In Time', 'Log Out Time', 'Hours Worked']]).setFontWeight('bold');
-  sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names);
+  // Table 1: attendance log + Present Today (moved here from the old Table
+  // 2, since Table 2 no longer has employee rows to hold it — Present is a
+  // per-employee attribute, so it belongs alongside the rest of Table 1).
+  sheet.getRange(TABLE1_HEADER_ROW, 1, 1, TABLE1_COLS).setValues([['Name', 'Log In Time', 'Log Out Time', 'Hours Worked', 'Present Today']]).setFontWeight('bold');
+  sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names.map(function (n) { return [n]; }));
   sheet.getRange(TABLE1_START_ROW, 4, MAX_EMPLOYEES, 1).setFormulaR1C1('=IF(AND(RC[-2]<>"",RC[-1]<>""),(RC[-1]-RC[-2])*24,"")');
   sheet.getRange(TABLE1_START_ROW, 2, MAX_EMPLOYEES, 2).setNumberFormat('hh:mm:ss AM/PM');
   sheet.getRange(TABLE1_START_ROW, 4, MAX_EMPLOYEES, 1).setNumberFormat('0.00" hrs"');
+  sheet.getRange(TABLE1_START_ROW, 5, MAX_EMPLOYEES, 1).setValue(false);
 
-  // Table 2: present-today + task assignments, set by admin
-  sheet.getRange(TABLE2_HEADER_ROW, 1, 1, 2).setValues([['Name', 'Present Today']]).setFontWeight('bold');
-  sheet.getRange(TABLE2_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names);
-  sheet.getRange(TABLE2_START_ROW, 2, MAX_EMPLOYEES, 1).setValue(false);
-  sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setFontWeight('bold');
-
-  // Table 3: when each assigned task was actually marked done
-  sheet.getRange(TABLE3_LABEL_ROW, 1).setValue('Task completed at').setFontWeight('bold').setFontColor('#1F3864');
-  sheet.getRange(TABLE3_HEADER_ROW, 1, 1, 2).setValues([['Name', '']]).setFontWeight('bold');
-  sheet.getRange(TABLE3_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setFontWeight('bold');
-  sheet.getRange(TABLE3_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names);
-  sheet.getRange(TABLE3_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).setNumberFormat('hh:mm:ss AM/PM');
-
-  sheet.setColumnWidth(1, 110);
-  sheet.setColumnWidths(2, 3, 110);
-  for (var c = 3; c <= 2 + MAX_TASK_COLUMNS; c++) sheet.setColumnWidth(c, 130);
+  // Table 2: tasks, one row per task (unlimited). Header row: task-name
+  // label + each employee's name merged across a pair of columns.
+  // Sub-header row: "Assigned" / "Done at" under each half of that pair.
+  sheet.getRange(TABLE2_HEADER_ROW, TABLE2_NAME_COL, 2, 1).merge().setValue('Task').setFontWeight('bold').setVerticalAlignment('middle');
+  slots.forEach(function (slot, i) {
+    var col = taskAssignedCol_(i);
+    sheet.getRange(TABLE2_HEADER_ROW, col, 1, 2).merge().setValue(slot.active ? slot.name : '').setFontWeight('bold');
+    sheet.getRange(TABLE2_SUBHEADER_ROW, col).setValue('Assigned').setFontWeight('bold').setFontColor('#5C6370');
+    sheet.getRange(TABLE2_SUBHEADER_ROW, col + 1).setValue('Done at').setFontWeight('bold').setFontColor('#5C6370');
+  });
+  sheet.setColumnWidth(TABLE2_NAME_COL, 160);
+  for (var c = 0; c < MAX_EMPLOYEES; c++) {
+    sheet.setColumnWidth(taskAssignedCol_(c), 90);
+    sheet.setColumnWidth(taskDoneCol_(c), 110);
+  }
 
   // Seed any standing (recurring) tasks that apply to this day of the week —
   // this is what makes "Make base milk every weekday" show up on a brand-new
@@ -313,15 +338,16 @@ function getSheetForDate(date) {
 
 // After an employee is added, renamed, or removed, refresh the Name columns
 // on TODAY's tab and every remaining tab this month, so the roster shown
-// going forward matches reality. Tabs that already happened (earlier this
-// month) are deliberately left untouched — history stays historically
-// accurate.
+// going forward matches reality — including each employee's header on
+// Table 2, since tasks are now laid out with employees as columns there too.
+// Tabs that already happened (earlier this month) are deliberately left
+// untouched — history stays historically accurate.
 function syncEmployeeNamesForRestOfMonth_() {
   var now = new Date();
   var monthStart = getMonthStart(now);
   var ss = getOrCreateMonthSpreadsheet(monthStart);
   var slots = getAllEmployeeSlots_();
-  var names = slots.map(function (s) { return [s.active ? s.name : '']; });
+  var names = slots.map(function (s) { return s.active ? s.name : ''; });
   var total = daysInMonth(monthStart);
   var todayDay = now.getDate();
 
@@ -329,9 +355,79 @@ function syncEmployeeNamesForRestOfMonth_() {
     var d = new Date(monthStart);
     d.setDate(d.getDate() + (day - 1));
     var sheet = ensureDaySheet(ss, d);
-    sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names);
-    sheet.getRange(TABLE2_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names);
-    sheet.getRange(TABLE3_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names);
+    sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 1).setValues(names.map(function (n) { return [n]; }));
+    slots.forEach(function (slot, i) {
+      sheet.getRange(TABLE2_HEADER_ROW, taskAssignedCol_(i)).setValue(slot.active ? slot.name : '');
+    });
+  }
+}
+
+// ---- Task-row helpers (Table 2) ----------------------------------------
+
+// How many task rows currently exist on this day tab, by scanning column A
+// from the top of the task list until the first blank cell. Relies on the
+// invariant — kept by writeTaskRows_/applyStandingTasksToSheet_/planTask —
+// that task rows are always contiguous with no gaps, and anything past the
+// last real task is cleared blank.
+function getTaskRowCount_(sheet) {
+  var names = sheet.getRange(TABLE2_TASKS_START_ROW, TABLE2_NAME_COL, TASK_ROW_SCAN_WINDOW, 1).getValues();
+  var count = 0;
+  for (var i = 0; i < names.length; i++) {
+    if (!names[i][0]) break;
+    count++;
+  }
+  return count;
+}
+
+// Reads the current task rows as parallel arrays: names[r], assigned[r][slotIdx]
+// (bool), done[r][slotIdx] (Date or null). One or two range reads total,
+// regardless of task count.
+function readTaskRows_(sheet) {
+  var rowCount = getTaskRowCount_(sheet);
+  if (!rowCount) return { count: 0, names: [], assigned: [], done: [] };
+
+  var names = sheet.getRange(TABLE2_TASKS_START_ROW, TABLE2_NAME_COL, rowCount, 1).getValues().map(function (r) { return r[0]; });
+  var fullGrid = sheet.getRange(TABLE2_TASKS_START_ROW, TABLE2_FIRST_EMP_COL, rowCount, MAX_EMPLOYEES * 2).getValues();
+  var assigned = fullGrid.map(function (row) {
+    var out = [];
+    for (var i = 0; i < MAX_EMPLOYEES; i++) out.push(!!row[i * 2]);
+    return out;
+  });
+  var done = fullGrid.map(function (row) {
+    var out = [];
+    for (var i = 0; i < MAX_EMPLOYEES; i++) out.push(row[i * 2 + 1] || null);
+    return out;
+  });
+  return { count: rowCount, names: names, assigned: assigned, done: done };
+}
+
+// Replaces the day's whole task list (names + who's assigned) in one go —
+// what "Save tasks" calls. Deliberately leaves the "Done at" column alone
+// for rows that still exist after the save, so editing who's assigned to a
+// task doesn't erase whether it was already marked done today. Rows beyond
+// the new (shorter) list are fully cleared — name, assigned, AND done — so a
+// stale completion time can never resurface if that row position gets
+// reused by a different task later.
+function writeTaskRows_(sheet, tasks, slots) {
+  var prevCount = getTaskRowCount_(sheet);
+  var newCount = tasks.length;
+
+  if (newCount > 0) {
+    var nameValues = tasks.map(function (t) { return [t.name]; });
+    sheet.getRange(TABLE2_TASKS_START_ROW, TABLE2_NAME_COL, newCount, 1).setValues(nameValues);
+
+    var assignedGrid = tasks.map(function (t) {
+      return slots.map(function (slot) { return !!(t.assignments && t.assignments[slot.id]); });
+    });
+    slots.forEach(function (slot, i) {
+      var colValues = assignedGrid.map(function (row) { return [row[i]]; });
+      sheet.getRange(TABLE2_TASKS_START_ROW, taskAssignedCol_(i), newCount, 1).setValues(colValues);
+    });
+  }
+
+  if (prevCount > newCount) {
+    var extra = prevCount - newCount;
+    sheet.getRange(TABLE2_TASKS_START_ROW + newCount, TABLE2_NAME_COL, extra, TABLE2_NUM_COLS).clearContent();
   }
 }
 
@@ -342,24 +438,21 @@ function getStaffData() {
   var now = new Date();
   var activeEmployees = getActiveEmployeesWithIndex_();
 
-  var attendance = sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 3).getValues(); // name, in, out
-  var presentCol = sheet.getRange(TABLE2_START_ROW, 2, MAX_EMPLOYEES, 1).getValues(); // present
-  var taskHeaders = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
-  var assignedGrid = sheet.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).getValues();
-  var completedGrid = sheet.getRange(TABLE3_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).getValues();
+  var attendance = sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, TABLE1_COLS).getValues(); // name, in, out, hours, present
+  var taskRows = readTaskRows_(sheet);
 
   var employees = activeEmployees.map(function (emp) {
     var i = emp.idx;
     var inTime = attendance[i][1];
     var outTime = attendance[i][2];
+    var present = !!attendance[i][4];
     var tasks = [];
-    for (var c = 0; c < MAX_TASK_COLUMNS; c++) {
-      if (!taskHeaders[c]) continue;
-      var doneVal = completedGrid[i][c];
+    for (var t = 0; t < taskRows.count; t++) {
+      var doneVal = taskRows.done[t][i];
       tasks.push({
-        col: c,
-        name: taskHeaders[c],
-        assigned: !!assignedGrid[i][c],
+        col: t, // opaque index into this day's task list (identifies a task row, same idea as the old column index)
+        name: taskRows.names[t],
+        assigned: !!taskRows.assigned[t][i],
         completedAt: doneVal ? Utilities.formatDate(doneVal, TIMEZONE, 'HH:mm:ss') : null
       });
     }
@@ -368,7 +461,7 @@ function getStaffData() {
       name: emp.name,
       loginTime: inTime ? Utilities.formatDate(inTime, TIMEZONE, 'HH:mm:ss') : null,
       logoutTime: outTime ? Utilities.formatDate(outTime, TIMEZONE, 'HH:mm:ss') : null,
-      present: !!presentCol[i][0],
+      present: present,
       tasks: tasks
     };
   });
@@ -387,14 +480,13 @@ function logAction(employeeId, action) {
   if (idx === -1) throw new Error('Unknown or inactive employee: ' + employeeId);
 
   var row = TABLE1_START_ROW + idx;
-  var presentRow = TABLE2_START_ROW + idx;
   var now = new Date();
 
   if (action === 'in') {
     var existingIn = sheet.getRange(row, 2).getValue();
     if (!existingIn) {
       sheet.getRange(row, 2).setValue(now);
-      sheet.getRange(presentRow, 2).setValue(true);
+      sheet.getRange(row, 5).setValue(true); // Present Today
     }
   } else if (action === 'out') {
     var hasIn = sheet.getRange(row, 2).getValue();
@@ -412,21 +504,27 @@ function logAction(employeeId, action) {
 // Marks one employee's one task as done "now", logging the time to the
 // second. Idempotent (tapping twice doesn't overwrite the first time) and
 // guarded server-side: a task can only be marked done if it was assigned to
-// that person and they've already logged in today.
+// that person and they've already logged in today. `col` is the task's
+// index within today's task list (see getStaffData) — it now maps to a
+// sheet row instead of a sheet column, but the client-facing meaning
+// ("which task in the list") is unchanged.
 function completeTask(employeeId, col) {
   var sheet = getTodaySheet();
   var slots = getAllEmployeeSlots_();
   var idx = slots.findIndex(function (s) { return s.id === employeeId && s.active; });
   if (idx === -1) throw new Error('Unknown or inactive employee: ' + employeeId);
-  if (col < 0 || col >= MAX_TASK_COLUMNS) throw new Error('Invalid task column.');
 
-  var present = sheet.getRange(TABLE2_START_ROW + idx, 2).getValue();
+  var rowCount = getTaskRowCount_(sheet);
+  if (col < 0 || col >= rowCount) throw new Error('Invalid task.');
+
+  var present = sheet.getRange(TABLE1_START_ROW + idx, 5).getValue();
   if (!present) throw new Error('Log in before marking a task done.');
 
-  var assigned = sheet.getRange(TABLE2_START_ROW + idx, 3 + col).getValue();
+  var taskRow = TABLE2_TASKS_START_ROW + col;
+  var assigned = sheet.getRange(taskRow, taskAssignedCol_(idx)).getValue();
   if (!assigned) throw new Error('This task is not assigned to this person today.');
 
-  var doneCell = sheet.getRange(TABLE3_START_ROW + idx, 3 + col);
+  var doneCell = sheet.getRange(taskRow, taskDoneCol_(idx));
   if (!doneCell.getValue()) {
     doneCell.setValue(new Date());
   }
@@ -466,17 +564,16 @@ function getAdminData(pin, dateStr) {
   var date = dateStr ? parseDateStr_(dateStr) : new Date();
   var sheet = getSheetForDate(date);
   var activeEmployees = getActiveEmployeesWithIndex_();
-  var taskHeaders = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
-  var taskGrid = sheet.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).getValues();
+  var taskRows = readTaskRows_(sheet);
 
-  // Match each of this day's task columns against the active standing-task
-  // list by name (same case-insensitive match applyStandingTasksToSheet_
-  // uses to seed idempotently), so the admin UI can show a single unified
-  // task list with a "Repeats" chip instead of a separate standing-tasks
-  // card. A task only counts as "standing" here if it repeats on this
-  // date's own weekday — if it's linked to a standing rule that doesn't
-  // include today, it's shown as one-time-for-this-day (the recurring copy
-  // lives on its own days).
+  // Match each of this day's tasks against the active standing-task list by
+  // name (same case-insensitive match applyStandingTasksToSheet_ uses to
+  // seed idempotently), so the admin UI can show a single unified task list
+  // with a "Repeats" chip instead of a separate standing-tasks card. A task
+  // only counts as "standing" here if it repeats on this date's own
+  // weekday — if it's linked to a standing rule that doesn't include today,
+  // it's shown as one-time-for-this-day (the recurring copy lives on its
+  // own days).
   var weekday = date.getDay();
   var standingByName = {};
   getAllStandingTasks_().forEach(function (t) {
@@ -486,13 +583,12 @@ function getAdminData(pin, dateStr) {
   });
 
   var tasks = [];
-  for (var c = 0; c < MAX_TASK_COLUMNS; c++) {
-    if (!taskHeaders[c]) continue;
+  for (var r = 0; r < taskRows.count; r++) {
     var assignments = {};
-    activeEmployees.forEach(function (emp) { assignments[emp.id] = !!taskGrid[emp.idx][c]; });
-    var match = standingByName[String(taskHeaders[c]).trim().toLowerCase()];
+    activeEmployees.forEach(function (emp) { assignments[emp.id] = !!taskRows.assigned[r][emp.idx]; });
+    var match = standingByName[String(taskRows.names[r]).trim().toLowerCase()];
     tasks.push({
-      name: taskHeaders[c],
+      name: taskRows.names[r],
       assignments: assignments,
       standing: match ? { id: match.id, days: match.days } : null
     });
@@ -525,43 +621,21 @@ function getTasksOverviewForMonth(pin, monthIso) {
     var d = new Date(monthStart);
     d.setDate(d.getDate() + (day - 1));
     var sheet = ensureDaySheet(ss, d);
-    var headerRow = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
-    var count = headerRow.filter(function (h) { return !!h; }).length;
+    var count = getTaskRowCount_(sheet);
     if (count > 0) byDate[ymdFromDate_(d)] = count;
   }
   return byDate;
 }
 
-// tasks: [{ name: string, assignments: { employeeId: bool, ... } }, ...] (max MAX_TASK_COLUMNS)
+// tasks: [{ name: string, assignments: { employeeId: bool, ... } }, ...] — no limit.
 // dateStr: optional 'yyyy-MM-dd' — defaults to today.
 function saveTasks(pin, dateStr, tasks) {
   assertPin_(pin);
-  if (tasks.length > MAX_TASK_COLUMNS) {
-    throw new Error('Max ' + MAX_TASK_COLUMNS + ' tasks per day.');
-  }
   var date = dateStr ? parseDateStr_(dateStr) : new Date();
   var sheet = getSheetForDate(date);
   var slots = getAllEmployeeSlots_();
 
-  var headerRow = [];
-  for (var c = 0; c < MAX_TASK_COLUMNS; c++) {
-    headerRow.push(c < tasks.length ? tasks[c].name : '');
-  }
-  sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
-  sheet.getRange(TABLE3_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]); // mirror onto the completion table's header too
-
-  var gridValues = [];
-  for (var r = 0; r < MAX_EMPLOYEES; r++) {
-    var rowVals = [];
-    var slotId = slots[r].id;
-    for (var c2 = 0; c2 < MAX_TASK_COLUMNS; c2++) {
-      var val = false;
-      if (c2 < tasks.length && tasks[c2].assignments && tasks[c2].assignments[slotId]) val = true;
-      rowVals.push(val);
-    }
-    gridValues.push(rowVals);
-  }
-  sheet.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).setValues(gridValues);
+  writeTaskRows_(sheet, tasks, slots);
 
   return getAdminData(pin, dateStr);
 }
@@ -570,12 +644,11 @@ function saveTasks(pin, dateStr, tasks) {
 // admin can plan a task across a week or a month in one go instead of
 // re-entering it on each day's tab. Each date is handled independently:
 // - If that day already has a task with the same name (from a previous plan,
-//   or "Copy yesterday's tasks", or manual entry), the assignments are
-//   merged in (OR'd together) onto the existing column instead of creating a
+//   or "Copy previous day's tasks", or manual entry), the assignments are
+//   merged in (OR'd together) onto the existing row instead of creating a
 //   duplicate.
-// - Otherwise the task is added to that day's first free task column.
-// - A day that already has MAX_TASK_COLUMNS tasks and no matching name is
-//   skipped (reported back so the admin can see it happened).
+// - Otherwise the task is appended as a new row — there's no fixed number of
+//   task rows to run out of, so nothing gets skipped for being "full".
 // dates: array of 'yyyy-MM-dd' strings (interpreted in TIMEZONE).
 // assignments: { employeeId: bool, ... }
 function planTask(pin, name, assignments, dates) {
@@ -583,46 +656,43 @@ function planTask(pin, name, assignments, dates) {
   name = (name || '').trim();
   if (!name) throw new Error('Enter a task name.');
   if (!dates || !dates.length) throw new Error('Pick at least one date.');
-  if (dates.length > 62) throw new Error('That\'s a lot of dates at once — try a smaller range.');
+  if (dates.length > 62) throw new Error('That\'s a lot of dates at once. Try a smaller range.');
 
   var slots = getAllEmployeeSlots_();
   var applied = [];
-  var skipped = [];
 
   dates.forEach(function (dateStr) {
     var date = parseDateStr_(dateStr);
     var sheet = getSheetForDate(date);
+    var taskRows = readTaskRows_(sheet);
 
-    var headerRow = sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
-    var col = -1;
-    for (var c = 0; c < MAX_TASK_COLUMNS; c++) {
-      if (headerRow[c] && String(headerRow[c]).trim().toLowerCase() === name.toLowerCase()) { col = c; break; }
+    var rowOffset = -1;
+    for (var r = 0; r < taskRows.count; r++) {
+      if (String(taskRows.names[r]).trim().toLowerCase() === name.toLowerCase()) { rowOffset = r; break; }
     }
-    if (col === -1) {
-      for (var c2 = 0; c2 < MAX_TASK_COLUMNS; c2++) {
-        if (!headerRow[c2]) { col = c2; break; }
-      }
-    }
-    if (col === -1) { skipped.push(dateStr); return; }
 
-    headerRow[col] = name;
-    sheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]);
-    sheet.getRange(TABLE3_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).setValues([headerRow]); // mirror header onto completion table
-
-    var existingCol = sheet.getRange(TABLE2_START_ROW, 3 + col, MAX_EMPLOYEES, 1).getValues();
-    var colValues = [];
-    for (var r = 0; r < MAX_EMPLOYEES; r++) {
-      var slotId = slots[r].id;
-      var wasChecked = !!existingCol[r][0];
-      var nowChecked = !!(assignments && assignments[slotId]);
-      colValues.push([wasChecked || nowChecked]);
+    if (rowOffset === -1) {
+      rowOffset = taskRows.count;
+      var newRow = TABLE2_TASKS_START_ROW + rowOffset;
+      sheet.getRange(newRow, TABLE2_NAME_COL).setValue(name);
+      slots.forEach(function (slot, i) {
+        sheet.getRange(newRow, taskAssignedCol_(i)).setValue(!!(assignments && assignments[slot.id]));
+      });
+    } else {
+      var existingRow = TABLE2_TASKS_START_ROW + rowOffset;
+      slots.forEach(function (slot, i) {
+        var wasChecked = !!taskRows.assigned[rowOffset][i];
+        var nowChecked = !!(assignments && assignments[slot.id]);
+        if (nowChecked && !wasChecked) {
+          sheet.getRange(existingRow, taskAssignedCol_(i)).setValue(true);
+        }
+      });
     }
-    sheet.getRange(TABLE2_START_ROW, 3 + col, MAX_EMPLOYEES, 1).setValues(colValues);
 
     applied.push(dateStr);
   });
 
-  return { applied: applied, skipped: skipped };
+  return { applied: applied, skipped: [] };
 }
 
 function parseDateStr_(s) {
@@ -650,16 +720,14 @@ function copyPreviousDayTasks(pin, dateStr) {
   prev.setDate(prev.getDate() - 1);
   var prevSheet = getSheetForDate(prev);
 
-  var headerRow = prevSheet.getRange(TABLE2_HEADER_ROW, 3, 1, MAX_TASK_COLUMNS).getValues()[0];
-  var grid = prevSheet.getRange(TABLE2_START_ROW, 3, MAX_EMPLOYEES, MAX_TASK_COLUMNS).getValues();
+  var taskRows = readTaskRows_(prevSheet);
   var activeEmployees = getActiveEmployeesWithIndex_();
 
   var tasks = [];
-  for (var c = 0; c < MAX_TASK_COLUMNS; c++) {
-    if (!headerRow[c]) continue;
+  for (var r = 0; r < taskRows.count; r++) {
     var assignments = {};
-    activeEmployees.forEach(function (emp) { assignments[emp.id] = !!grid[emp.idx][c]; });
-    tasks.push({ name: headerRow[c], assignments: assignments, standing: null });
+    activeEmployees.forEach(function (emp) { assignments[emp.id] = !!taskRows.assigned[r][emp.idx]; });
+    tasks.push({ name: taskRows.names[r], assignments: assignments, standing: null });
   }
   return { tasks: tasks };
 }
@@ -678,7 +746,7 @@ function addEmployee(pin, name) {
 
   var slots = getAllEmployeeSlots_();
   var freeIdx = slots.findIndex(function (s) { return !s.active; });
-  if (freeIdx === -1) throw new Error('Max ' + MAX_EMPLOYEES + ' employees — remove someone first.');
+  if (freeIdx === -1) throw new Error('Max ' + MAX_EMPLOYEES + ' employees. Remove someone first.');
 
   slots[freeIdx] = { id: slots[freeIdx].id, name: name, active: true };
   saveEmployeeSlots_(slots);
@@ -738,9 +806,6 @@ function saveStandingTask(pin, task) {
     if (idx === -1) throw new Error('Unknown standing task.');
     list[idx] = { id: task.id, name: name, days: days, assignments: task.assignments || {}, active: true };
   } else {
-    if (list.filter(function (t) { return t.active; }).length >= MAX_STANDING_TASKS) {
-      throw new Error('Max ' + MAX_STANDING_TASKS + ' standing tasks — remove one first.');
-    }
     list.push({ id: Utilities.getUuid(), name: name, days: days, assignments: task.assignments || {}, active: true });
   }
   saveStandingTasksList_(list);
@@ -759,6 +824,185 @@ function removeStandingTask(pin, id) {
   var list = getAllStandingTasks_().filter(function (t) { return t.id !== id; });
   saveStandingTasksList_(list);
   return list;
+}
+
+// ---- Admin: Payroll -----------------------------------------------------
+//
+// Pay is computed from the exact log-in/log-out duration (down to the
+// second — never rounded to a quarter hour) times an hourly rate. Each
+// employee's rate is stored as a small history — { effectiveFrom: 'yyyy-MM-dd',
+// rate } entries — rather than a single number, so a raise can be scheduled
+// for a specific date (today, a future date, or backdated) without
+// silently rewriting what past days were "worth". Pay is totaled by
+// employee SLOT, not by name text, so a mid-month rename or removal never
+// splits or drops someone's earnings — see readTaskRows_-style slot
+// reasoning used elsewhere in this file for the same idea applied to tasks.
+
+function getAllWageRates_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(WAGE_RATES_PROP_KEY);
+  if (!raw) return {};
+  try {
+    var parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function saveWageRates_(map) {
+  PropertiesService.getScriptProperties().setProperty(WAGE_RATES_PROP_KEY, JSON.stringify(map));
+}
+
+// The rate in effect for a given employee on a given date: the entry with
+// the latest effectiveFrom that is on or before dateStr, falling back to
+// DEFAULT_WAGE_RATE if nothing qualifies yet (e.g. before their first rate
+// was ever set).
+function getRateForEmployeeOnDate_(employeeId, dateStr) {
+  var history = getAllWageRates_()[employeeId] || [];
+  var applicable = DEFAULT_WAGE_RATE;
+  var best = null;
+  history.forEach(function (entry) {
+    if (entry.effectiveFrom <= dateStr && (!best || entry.effectiveFrom > best.effectiveFrom)) best = entry;
+  });
+  if (best) applicable = best.rate;
+  return applicable;
+}
+
+function round2_(n) { return Math.round(n * 100) / 100; }
+
+function hoursBetween_(inTime, outTime) {
+  if (!inTime || !outTime) return 0;
+  var ms = outTime.getTime() - inTime.getTime();
+  return ms > 0 ? ms / 3600000 : 0;
+}
+
+function formatHoursMins_(hoursDecimal) {
+  var totalMin = Math.round(hoursDecimal * 60);
+  var hh = Math.floor(totalMin / 60);
+  var mm = totalMin % 60;
+  return hh + 'h ' + (mm < 10 ? '0' + mm : String(mm)) + 'm';
+}
+
+// One row per employee SLOT (not just active ones) for a single day tab —
+// hours worked, the rate that applied that day, and pay. Blank name = that
+// slot wasn't in use that day. Callers filter/label as appropriate.
+function computePayrollDay_(sheet, dateStr, slots) {
+  var namesCol = sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 1).getValues();
+  var inCol = sheet.getRange(TABLE1_START_ROW, 2, MAX_EMPLOYEES, 1).getValues();
+  var outCol = sheet.getRange(TABLE1_START_ROW, 3, MAX_EMPLOYEES, 1).getValues();
+  return slots.map(function (s, i) {
+    var name = namesCol[i][0] || '';
+    var hours = hoursBetween_(inCol[i][0], outCol[i][0]);
+    var rate = getRateForEmployeeOnDate_(s.id, dateStr);
+    return { id: s.id, name: name, hours: hours, rate: rate, pay: hours * rate };
+  });
+}
+
+// dateStr: optional 'yyyy-MM-dd' — defaults to today. Shows every currently
+// active employee (even with 0 hours so far) plus anyone inactive who still
+// has a name on this specific day's tab (so a person removed today still
+// shows their pay for today).
+function getPayrollDay(pin, dateStr) {
+  assertPin_(pin);
+  var date = dateStr ? parseDateStr_(dateStr) : new Date();
+  var sheet = getSheetForDate(date);
+  var slots = getAllEmployeeSlots_();
+  var thisIso = ymdFromDate_(date);
+  var dayRows = computePayrollDay_(sheet, thisIso, slots);
+
+  var rows = [];
+  dayRows.forEach(function (r, i) {
+    if (!slots[i].active && !r.name) return; // slot never used, nothing to show
+    rows.push({
+      id: r.id,
+      name: r.name || slots[i].name || '(removed)',
+      hours: round2_(r.hours),
+      hoursLabel: formatHoursMins_(r.hours),
+      rate: r.rate,
+      pay: round2_(r.pay)
+    });
+  });
+
+  var todayIso = ymdFromDate_(new Date());
+  return {
+    date: thisIso,
+    dateLabel: Utilities.formatDate(date, TIMEZONE, 'EEEE, MMMM d, yyyy'),
+    isToday: thisIso === todayIso,
+    rows: rows
+  };
+}
+
+// monthIso: 'yyyy-MM'. Totals hours/pay per employee SLOT across every day
+// in that month (days beyond today, if this is the current month, simply
+// contribute 0 since nobody's logged in yet — no special-casing needed).
+// "Month so far" and "end of month" are the same call: the number is
+// whatever's actually on the days that have happened, and it stops growing
+// once the month is over.
+function getPayrollForMonth(pin, monthIso) {
+  assertPin_(pin);
+  var parts = String(monthIso).split('-');
+  var monthStart = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+  var ss = getOrCreateMonthSpreadsheet(monthStart);
+  var total = daysInMonth(monthStart);
+  var slots = getAllEmployeeSlots_();
+
+  var totals = slots.map(function (s) { return { id: s.id, name: s.active ? s.name : '', hours: 0, pay: 0 }; });
+
+  for (var day = 1; day <= total; day++) {
+    var d = new Date(monthStart);
+    d.setDate(d.getDate() + (day - 1));
+    var dateStr = ymdFromDate_(d);
+    var sheet = ensureDaySheet(ss, d);
+    var dayRows = computePayrollDay_(sheet, dateStr, slots);
+    dayRows.forEach(function (r, i) {
+      if (r.name) totals[i].name = r.name; // most recent name seen this month for this slot, so a mid-month rename doesn't split the total
+      totals[i].hours += r.hours;
+      totals[i].pay += r.pay;
+    });
+  }
+
+  return totals
+    .filter(function (t) { return t.name; })
+    .map(function (t) { return { id: t.id, name: t.name, hours: round2_(t.hours), hoursLabel: formatHoursMins_(t.hours), pay: round2_(t.pay) }; });
+}
+
+// Current rate (as of today) + soonest upcoming scheduled change, if any,
+// for every active employee — what the rate-editor card shows.
+function getWageRatesInfo(pin) {
+  assertPin_(pin);
+  var employees = getActiveEmployeesWithIndex_();
+  var todayIso = ymdFromDate_(new Date());
+  var allRates = getAllWageRates_();
+  return employees.map(function (e) {
+    var history = (allRates[e.id] || []).slice().sort(function (a, b) { return a.effectiveFrom < b.effectiveFrom ? -1 : 1; });
+    var upcoming = history.filter(function (h) { return h.effectiveFrom > todayIso; });
+    return {
+      id: e.id,
+      name: e.name,
+      currentRate: getRateForEmployeeOnDate_(e.id, todayIso),
+      upcoming: upcoming.length ? upcoming[0] : null
+    };
+  });
+}
+
+// effectiveFromStr: 'yyyy-MM-dd' — can be today, a past date (backdated), or
+// a future date (scheduled). Re-saving the same effective date replaces
+// that entry rather than piling up duplicates.
+function setWageRate(pin, employeeId, rate, effectiveFromStr) {
+  assertPin_(pin);
+  rate = Number(rate);
+  if (!(rate >= 0)) throw new Error('Enter a valid hourly rate.');
+  if (!effectiveFromStr) throw new Error('Pick an effective date.');
+
+  var map = getAllWageRates_();
+  var list = map[employeeId] || [];
+  var idx = list.findIndex(function (e) { return e.effectiveFrom === effectiveFromStr; });
+  if (idx !== -1) list[idx] = { effectiveFrom: effectiveFromStr, rate: rate };
+  else list.push({ effectiveFrom: effectiveFromStr, rate: rate });
+  map[employeeId] = list;
+  saveWageRates_(map);
+
+  return getWageRatesInfo(pin);
 }
 
 /**
