@@ -49,6 +49,9 @@
   .date-banner .day { font-size: 20px; font-weight: 700; color: var(--navy); }
   .date-banner .date { font-size: 14px; color: var(--text-secondary); }
 
+  /* Mirrors Stylesheet.html's .table-scroll fix - see the comment there. */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -4px; }
+  .table-scroll table { min-width: 480px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; font-weight: 500; color: var(--text-secondary); padding: 10px 8px; border-bottom: 1px solid var(--border); }
   td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
@@ -167,6 +170,14 @@
   .drag-handle:active { cursor: grabbing; }
   tr.dragging-row { opacity: 0.45; }
   tr.drop-target td { box-shadow: inset 0 2px 0 var(--navy); }
+
+  /* Mirrors Stylesheet.html's mobile tightening pass - see the comment there. */
+  @media (max-width: 480px) {
+    body { padding: 20px 10px 48px; }
+    .card { padding: 16px; }
+    th, td { padding: 8px 6px; }
+    .time-btn { min-width: 96px; padding: 9px 10px; }
+  }
 </style>
 </head>
 <body>
@@ -187,28 +198,85 @@
   <!-- STAFF VIEW -->
   <div class="view active" id="view-staff">
 
+    <div class="card" id="whoami-card">
+      <div id="whoami-locked">
+        <h2>Who are you?</h2>
+        <p class="hint">Everyone can see this page, but you need your own PIN to log yourself in/out or mark your own tasks done - it keeps people from tapping each other's buttons by accident. The admin PIN also works here as a master override. Preview PINs: Miw <b>1111</b>, Nureen <b>2222</b>, Richa <b>3333</b>.</p>
+        <div class="buttons" style="align-items:center;">
+          <select id="whoami-select" class="task-name-input" style="width:auto;"></select>
+          <input type="password" id="whoami-pin" placeholder="Your PIN" maxlength="12" style="width:auto;" onkeydown="if(event.key==='Enter')identifyMe();">
+          <button class="btn primary" onclick="identifyMe()">Continue</button>
+        </div>
+        <p class="hint" id="whoami-status" style="margin-top:8px;"></p>
+      </div>
+      <div id="whoami-unlocked" style="display:none;">
+        <p class="hint" style="margin:0;">Signed in as <b id="whoami-name"></b>. &nbsp;
+          <a href="javascript:void(0)" onclick="toggleMyHours()">My hours &amp; pay</a> &nbsp;·&nbsp;
+          <a href="javascript:void(0)" onclick="switchUser()">Switch user</a>
+        </p>
+      </div>
+    </div>
+
+    <div class="card" id="myhours-card" style="display:none;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">My hours &amp; pay</h2>
+        <div class="buttons" style="margin:0;">
+          <button class="btn ghost" onclick="myPayrollPrevDay()">‹ Prev day</button>
+          <button class="btn ghost" onclick="myPayrollGoToday()">Today</button>
+          <button class="btn ghost" onclick="myPayrollNextDay()">Next day ›</button>
+        </div>
+      </div>
+      <p class="hint" id="myhours-day-label">-</p>
+      <div class="table-scroll">
+      <table>
+        <thead><tr><th>Log in</th><th>Log out</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead>
+        <tbody id="myhours-day-body"></tbody>
+      </table>
+      </div>
+
+      <h2 style="margin-top:20px;">This month so far</h2>
+      <div class="table-scroll">
+      <table>
+        <thead><tr><th>Hours</th><th>Pay</th></tr></thead>
+        <tbody id="myhours-month-body"></tbody>
+      </table>
+      </div>
+
+      <p class="hint" style="margin-top:20px;">Change my PIN</p>
+      <div class="buttons" style="align-items:center;">
+        <input type="password" id="mypin-current" class="task-name-input" placeholder="Current PIN" style="width:auto;">
+        <input type="password" id="mypin-new" class="task-name-input" placeholder="New PIN (4+ chars)" style="width:auto;">
+        <button class="btn" onclick="changeMyPinFlow()">Change PIN</button>
+      </div>
+      <p class="hint" id="myhours-status" style="margin-top:10px;"></p>
+    </div>
+
     <div class="card">
       <div class="date-banner">
         <span class="day" id="today-day"></span>
         <span class="date" id="today-date"></span>
       </div>
-      <p class="hint">Tap your name's button when you arrive, and again when you leave. Times are logged to the second.</p>
+      <p class="hint">Times are logged to the second. Only your own row unlocks once you've identified yourself above - everyone else's stays visible but locked.</p>
 
+      <div class="table-scroll">
       <table>
         <thead>
           <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th></tr>
         </thead>
         <tbody id="attendance-body"></tbody>
       </table>
+      </div>
     </div>
 
     <div class="card task-table-wrap">
       <h2>Today's tasks</h2>
-      <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in; until then it stays faded as a reminder they haven't started yet. Tap "Mark done" as each task is finished; it logs the time too.</p>
+      <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in; until then it stays faded as a reminder they haven't started yet. Tap "Mark done" as each task is finished; it logs the time too - you can only mark your own.</p>
+      <div class="table-scroll">
       <table>
         <thead id="task-thead"></thead>
         <tbody id="task-body"></tbody>
       </table>
+      </div>
     </div>
 
   </div>
@@ -243,14 +311,17 @@
 
       <div class="card">
         <h2>Employees</h2>
-        <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet.</p>
+        <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet. Each person's PIN is what unlocks their own row on the Staff page - the admin PIN also works for anyone, as a master override.</p>
+        <div class="table-scroll">
         <table>
-          <thead><tr><th>Name</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>PIN</th><th></th></tr></thead>
           <tbody id="employee-body"></tbody>
         </table>
+        </div>
         <div class="buttons">
           <button class="btn" onclick="addEmployeeFlow()">+ Add employee</button>
         </div>
+        <p class="hint" id="employee-status" style="margin-top:10px;"></p>
       </div>
 
       <div class="card" id="tasks-card">
@@ -264,10 +335,12 @@
           </div>
         </div>
         <p class="hint">Click <b>+ Add task</b> below to add a row, type its name, and tick who's doing it. Each row has a small <b>Repeats</b> button next to its name, it says "One-time" until you set it. Click it and tick the days of the week you want that task to happen on, for example Mon-Fri for "Make base milk", then it shows up on those days automatically, with no need to re-add it. Jump to any date with the picker above, including anything planned ahead, to view, edit, or delete it, not just today. <b>Nothing here is saved until you click "Save tasks" below.</b> That one click also applies any Repeats changes you made.</p>
+        <div class="table-scroll">
         <table>
           <thead id="admin-thead"></thead>
           <tbody id="admin-body"></tbody>
         </table>
+        </div>
         <div class="buttons">
           <button class="btn" onclick="addTaskRow()">+ Add task</button>
           <button class="btn" onclick="copyPreviousDay()">Copy previous day's tasks</button>
@@ -323,10 +396,12 @@
       <div class="card">
         <h2>Hourly rates</h2>
         <p class="hint">Set what each person earns per hour. A rate change can start today, be backdated, or be scheduled for a future date, so past pay never silently changes unless you mean it to.</p>
+        <div class="table-scroll">
         <table>
           <thead><tr><th>Name</th><th>Current rate</th><th></th></tr></thead>
           <tbody id="rates-body"></tbody>
         </table>
+        </div>
         <p class="hint" id="rates-status" style="margin-top:10px;"></p>
       </div>
 
@@ -341,10 +416,12 @@
           </div>
         </div>
         <p class="hint">Hours are exact to the minute, not rounded to a quarter hour, computed from actual log in/out times and paid at whatever rate applied that day. Missed or wrong punches can be corrected with the Edit button on any row, for any day.</p>
+        <div class="table-scroll">
         <table>
-          <thead><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Log in</th><th>Log out</th><th>Hours</th><th>Rate</th><th>Pay</th><th></th></tr></thead>
           <tbody id="payroll-day-body"></tbody>
         </table>
+        </div>
         <p class="hint" id="attendance-status" style="margin-top:10px;"></p>
       </div>
 
@@ -358,10 +435,12 @@
           </div>
         </div>
         <p class="hint">Running total for the month so far. Once the month ends, this number is the final total, nothing extra to do. Use the arrows above to look back at past months.</p>
+        <div class="table-scroll">
         <table>
           <thead><tr><th>Name</th><th>Hours</th><th>Pay</th></tr></thead>
           <tbody id="payroll-month-body"></tbody>
         </table>
+        </div>
         <p class="hint" id="payroll-month-total" style="margin-top:10px; text-align:right; font-weight:600;"></p>
       </div>
     </div>
@@ -382,9 +461,9 @@
 
 var state = {
   employees: [
-    { id: 'MIW', name: 'Miw', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false },
-    { id: 'NUREEN', name: 'Nureen', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false },
-    { id: 'RICHA', name: 'Richa', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false }
+    { id: 'MIW', name: 'Miw', pin: '1111', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false },
+    { id: 'NUREEN', name: 'Nureen', pin: '2222', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false },
+    { id: 'RICHA', name: 'Richa', pin: '3333', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false }
   ],
   standingTasks: [
     { id: 'STD1', name: 'Make base milk', days: [1, 2, 3, 4, 5], assignments: { MIW: true, NUREEN: false, RICHA: false } },
@@ -399,6 +478,14 @@ var state = {
 var standingSeq = 3;
 var employeeSeq = 4;
 var adminUnlocked = false;
+var ADMIN_PIN = '1234';
+
+// ---- Identity: who's currently unlocked on the Staff page, for this page
+// load only (no localStorage) - mirrors the real app's "always ask, nothing
+// remembered" design. myId/myPin are only used client-side here since this
+// preview has no server round-trip to actually verify against. ----
+var myId = null;
+var myPin = null;
 
 function pad(n) { return n < 10 ? '0' + n : '' + n; }
 function nowTimeStr() {
@@ -439,9 +526,11 @@ function computeAdminDataForDate_(iso) {
   state.standingTasks.forEach(function (t) {
     if (t.days.indexOf(weekday) !== -1) standingByName[t.name.trim().toLowerCase()] = t;
   });
-  var tasks = day.tasks.map(function (t) {
+  var tasks = day.tasks.map(function (t, ti) {
     var match = standingByName[t.name.trim().toLowerCase()];
-    return { name: t.name, assignments: copyObj_(t.assignments), standing: match ? { id: match.id, days: match.days } : null };
+    var done = {};
+    state.employees.forEach(function (e) { done[e.id] = getTaskDoneForDate_(iso, ti, e.id); });
+    return { name: t.name, assignments: copyObj_(t.assignments), done: done, standing: match ? { id: match.id, days: match.days } : null };
   });
   var todayIso = ymd_(startOfDay_(new Date()));
   return {
@@ -449,7 +538,10 @@ function computeAdminDataForDate_(iso) {
     dateLabel: formatDateLabel_(dateObj),
     isToday: iso === todayIso,
     tasks: tasks,
-    employees: state.employees.map(function (e) { return { id: e.id, name: e.name }; })
+    // pin included (mirrors Code.gs's getAdminData) so EMPLOYEES stays
+    // correct across every admin-data reload, not just right after a PIN
+    // change - see the matching comment in Code.gs's getAdminData.
+    employees: state.employees.map(function (e) { return { id: e.id, name: e.name, pin: e.pin }; })
   };
 }
 
@@ -501,6 +593,7 @@ function renderDate() {
 function todayTasks_() { return getDay_(ymd_(startOfDay_(new Date()))).tasks; }
 
 function logIn(id) {
+  if (id !== myId) return;
   var emp = state.employees.find(function (e) { return e.id === id; });
   if (emp.loginTime) return;
   emp.loginTime = nowTimeStr();
@@ -508,12 +601,14 @@ function logIn(id) {
   renderStaff();
 }
 function logOut(id) {
+  if (id !== myId) return;
   var emp = state.employees.find(function (e) { return e.id === id; });
   if (!emp.loginTime || emp.logoutTime) return;
   emp.logoutTime = nowTimeStr();
   renderStaff();
 }
 function markDone(id, ti) {
+  if (id !== myId) return;
   var emp = state.employees.find(function (e) { return e.id === id; });
   if (!emp.present) return;
   if (!todayTasks_()[ti].assignments[id]) return;
@@ -523,18 +618,54 @@ function markDone(id, ti) {
   renderStaff();
 }
 
+// Same-day self-undo — reverts your own accidental tap (plain clear, not a
+// specific corrected time; only admin can type in a replacement via the
+// Payroll/Tasks editors). No "edited" flag gets set, same reasoning as the
+// real app: this is just you fixing your own immediate mistake.
+function undoPunch(which) {
+  if (!myId) return;
+  var emp = state.employees.find(function (e) { return e.id === myId; });
+  if (!emp) return;
+  if (which === 'in') { emp.loginTime = null; emp.present = false; }
+  else { emp.logoutTime = null; }
+  renderStaff();
+}
+function undoTaskDone(ti) {
+  if (!myId) return;
+  if (state.completions[myId]) delete state.completions[myId][ti];
+  renderStaff();
+}
+
 function renderStaff() {
+  populateWhoamiSelect_(state.employees);
   var body = document.getElementById('attendance-body');
   body.innerHTML = '';
   state.employees.forEach(function (emp) {
+    var isMe = !!(myId && emp.id === myId);
+    var locked = !isMe;
     var tr = document.createElement('tr');
+    if (locked) tr.className = 'row-locked';
+
+    var loginCell;
+    if (emp.loginTime) {
+      loginCell = '<button class="time-btn logged" disabled>In · ' + emp.loginTime + '</button>' +
+        (isMe ? ' <a href="javascript:void(0)" class="hint" onclick="undoPunch(\'in\')">Undo</a>' : '');
+    } else {
+      loginCell = '<button class="time-btn primary" ' + (isMe ? '' : 'disabled') + ' onclick="logIn(\'' + emp.id + '\')">Log in</button>';
+    }
+    var logoutCell;
+    if (emp.logoutTime) {
+      logoutCell = '<button class="time-btn out-logged" disabled>Out · ' + emp.logoutTime + '</button>' +
+        (isMe ? ' <a href="javascript:void(0)" class="hint" onclick="undoPunch(\'out\')">Undo</a>' : '');
+    } else {
+      logoutCell = '<button class="time-btn" ' + (!emp.loginTime || !isMe ? 'disabled' : '') + ' onclick="logOut(\'' + emp.id + '\')">Log out</button>';
+    }
+
     tr.innerHTML =
-      '<td class="name-cell">' + emp.name + '</td>' +
+      '<td class="name-cell">' + emp.name + (locked ? ' <span class="hint">🔒</span>' : '') + '</td>' +
       '<td><span class="pill ' + (emp.present ? 'present' : 'absent') + '">' + (emp.present ? 'Present' : 'Not in yet') + '</span></td>' +
-      '<td><button class="time-btn ' + (emp.loginTime ? 'logged' : 'primary') + '" ' + (emp.loginTime ? 'disabled' : '') + ' onclick="logIn(\'' + emp.id + '\')">' +
-        (emp.loginTime ? 'In · ' + emp.loginTime : 'Log in') + '</button></td>' +
-      '<td><button class="time-btn ' + (emp.logoutTime ? 'out-logged' : '') + '" ' + (!emp.loginTime || emp.logoutTime ? 'disabled' : '') + ' onclick="logOut(\'' + emp.id + '\')">' +
-        (emp.logoutTime ? 'Out · ' + emp.logoutTime : 'Log out') + '</button></td>';
+      '<td>' + loginCell + '</td>' +
+      '<td>' + logoutCell + '</td>';
     body.appendChild(tr);
   });
   renderTaskTable();
@@ -556,22 +687,125 @@ function renderTaskTable() {
     var tr = document.createElement('tr');
     var cells = state.employees.map(function (emp) {
       var has = !!t.assignments[emp.id];
+      var isMe = !!(myId && emp.id === myId);
       var faded = !emp.present ? ' emp-faded' : '';
       if (!has) return '<td class="task-col' + faded + '"><span class="not-applicable">–</span></td>';
       var doneAt = (state.completions[emp.id] || {})[ti];
-      if (doneAt) return '<td class="task-col' + faded + '"><span class="task-done-pill">✓ Done · ' + doneAt + '</span></td>';
-      return '<td class="task-col' + faded + '"><button class="task-btn" ' + (!emp.present ? 'disabled' : '') + ' onclick="markDone(\'' + emp.id + '\',' + ti + ')">Mark done</button></td>';
+      if (doneAt) {
+        var undoLink = isMe ? ' <a href="javascript:void(0)" class="hint" onclick="undoTaskDone(' + ti + ')">Undo</a>' : '';
+        return '<td class="task-col' + faded + '"><span class="task-done-pill">✓ Done · ' + doneAt + '</span>' + undoLink + '</td>';
+      }
+      return '<td class="task-col' + faded + '"><button class="task-btn" ' + (!emp.present || !isMe ? 'disabled' : '') + ' onclick="markDone(\'' + emp.id + '\',' + ti + ')">Mark done</button></td>';
     }).join('');
     tr.innerHTML = '<td class="name-cell">' + t.name + '</td>' + cells;
     body.appendChild(tr);
   });
 }
 
+// ---- Identify / switch user ----
+
+function populateWhoamiSelect_(employees) {
+  if (myId) return;
+  var sel = document.getElementById('whoami-select');
+  var cur = sel.value;
+  sel.innerHTML = employees.map(function (e) { return '<option value="' + e.id + '">' + e.name + '</option>'; }).join('');
+  if (cur) sel.value = cur;
+}
+
+function identifyMe() {
+  var id = document.getElementById('whoami-select').value;
+  var val = document.getElementById('whoami-pin').value;
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  document.getElementById('whoami-status').textContent = '';
+  if (!emp) return;
+  if (val !== ADMIN_PIN && (!emp.pin || val !== emp.pin)) {
+    document.getElementById('whoami-status').textContent = emp.pin ? 'Incorrect PIN.' : 'No PIN set for this employee yet - ask admin to set one.';
+    return;
+  }
+  myId = emp.id;
+  myPin = val;
+  document.getElementById('whoami-pin').value = '';
+  document.getElementById('whoami-locked').style.display = 'none';
+  document.getElementById('whoami-unlocked').style.display = 'block';
+  document.getElementById('whoami-name').textContent = emp.name;
+  renderStaff();
+}
+
+function switchUser() {
+  myId = null;
+  myPin = null;
+  document.getElementById('whoami-locked').style.display = 'block';
+  document.getElementById('whoami-unlocked').style.display = 'none';
+  document.getElementById('myhours-card').style.display = 'none';
+  renderStaff();
+}
+
+// ---- My hours & pay (personal view — private to whoever's identified) ----
+
+var myPayrollDayIso = null;
+
+function toggleMyHours() {
+  var card = document.getElementById('myhours-card');
+  var showing = card.style.display !== 'none';
+  card.style.display = showing ? 'none' : 'block';
+  if (!showing) {
+    myPayrollDayIso = ymd_(startOfDay_(new Date()));
+    loadMyPayrollDay_(myPayrollDayIso);
+    loadMyPayrollMonth_();
+  }
+}
+
+function loadMyPayrollDay_(iso) {
+  myPayrollDayIso = iso;
+  var todayIso = ymd_(startOfDay_(new Date()));
+  document.getElementById('myhours-day-label').textContent = formatDateLabel_(parseIso_(iso)) + (iso === todayIso ? ' (today)' : '');
+  var att = getAttendanceForDay_(iso, myId);
+  var hours = hoursFromTimes_(att.loginTime, att.logoutTime);
+  var rate = getRateForEmployeeOnDate_(myId, iso);
+  var pay = Math.round(hours * rate * 100) / 100;
+  var editedNote = (att.loginEdited || att.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+  document.getElementById('myhours-day-body').innerHTML =
+    '<tr><td>' + (att.loginTime ? att.loginTime.slice(0, 5) : '-') + '</td><td>' + (att.logoutTime ? att.logoutTime.slice(0, 5) : '-') + '</td><td>' + formatHoursMins_(hours) + editedNote + '</td><td>฿' + rate + '/hr</td><td>฿' + pay.toFixed(2) + '</td></tr>';
+}
+function myPayrollPrevDay() { loadMyPayrollDay_(shiftIso_(myPayrollDayIso, -1)); }
+function myPayrollNextDay() { loadMyPayrollDay_(shiftIso_(myPayrollDayIso, 1)); }
+function myPayrollGoToday() { loadMyPayrollDay_(ymd_(startOfDay_(new Date()))); }
+
+function loadMyPayrollMonth_() {
+  var d = new Date();
+  var total = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  var todayDate = d.getDate();
+  var hours = 0, pay = 0;
+  for (var day = 1; day <= todayDate; day++) {
+    var iso = d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(day);
+    var att = getAttendanceForDay_(iso, myId);
+    var h = hoursFromTimes_(att.loginTime, att.logoutTime);
+    hours += h;
+    pay += h * getRateForEmployeeOnDate_(myId, iso);
+  }
+  document.getElementById('myhours-month-body').innerHTML =
+    '<tr><td>' + formatHoursMins_(hours) + '</td><td>฿' + pay.toFixed(2) + '</td></tr>';
+}
+
+function changeMyPinFlow() {
+  var cur = document.getElementById('mypin-current').value;
+  var next = document.getElementById('mypin-new').value;
+  var emp = state.employees.find(function (e) { return e.id === myId; });
+  if (!emp) return;
+  if (cur !== ADMIN_PIN && cur !== emp.pin) { document.getElementById('myhours-status').textContent = 'Incorrect current PIN.'; return; }
+  if (!next || next.length < 4) { alert('New PIN should be at least 4 characters.'); return; }
+  emp.pin = next;
+  myPin = next;
+  document.getElementById('mypin-current').value = '';
+  document.getElementById('mypin-new').value = '';
+  document.getElementById('myhours-status').textContent = 'PIN changed.';
+}
+
 // ---- Admin: unlock ----
 
 function unlockAdmin() {
   var val = document.getElementById('pin-input').value;
-  if (val === '1234') {
+  if (val === ADMIN_PIN) {
     adminUnlocked = true;
     document.getElementById('admin-lock').style.display = 'none';
     document.getElementById('admin-panel').style.display = 'block';
@@ -583,6 +817,34 @@ function unlockAdmin() {
   } else {
     alert('Wrong PIN (preview PIN is 1234)');
   }
+}
+
+// ---- Task "done" times, unified across today (tracked in state.completions)
+// and other days (tracked on the day's own task objects) - mirrors the real
+// app's getAdminData/setTaskDoneTime, so the admin Tasks-for-date editor can
+// show and correct a task's completion time for any day, not just today. ----
+
+function getTaskDoneForDate_(iso, ti, empId) {
+  var todayIso = ymd_(startOfDay_(new Date()));
+  if (iso === todayIso) return (state.completions[empId] || {})[ti] || null;
+  var day = getDay_(iso);
+  var t = day.tasks[ti];
+  return (t && t.done && t.done[empId]) || null;
+}
+
+function setTaskDoneForDate_(iso, ti, empId, timeStrOrNull) {
+  var todayIso = ymd_(startOfDay_(new Date()));
+  if (iso === todayIso) {
+    if (!state.completions[empId]) state.completions[empId] = {};
+    if (timeStrOrNull) state.completions[empId][ti] = timeStrOrNull; else delete state.completions[empId][ti];
+    renderStaff();
+    return;
+  }
+  var day = getDay_(iso);
+  var t = day.tasks[ti];
+  if (!t) return;
+  if (!t.done) t.done = {};
+  if (timeStrOrNull) t.done[empId] = timeStrOrNull; else delete t.done[empId];
 }
 
 // ---- Admin sub-tabs (Tasks / Payroll) ----
@@ -758,12 +1020,12 @@ function loadPayrollDay_(iso) {
 function renderPayrollDayBody_() {
   var body = document.getElementById('payroll-day-body');
   if (!payrollDayRows.length) {
-    body.innerHTML = '<tr><td colspan="5" class="hint">No one logged in this day.</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="hint">No one logged in this day.</td></tr>';
     return;
   }
   body.innerHTML = payrollDayRows.map(function (r) {
     var editedNote = (r.loginEdited || r.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
-    var row = '<tr><td>' + r.name + editedNote + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
+    var row = '<tr><td>' + r.name + editedNote + '</td><td>' + (r.loginTime || '-') + '</td><td>' + (r.logoutTime || '-') + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
       '<td><button type="button" class="btn ghost" onclick="toggleAttendanceEditor_(\'' + r.id + '\')">Edit</button></td></tr>';
     if (openAttendanceEditorId === r.id) row += renderAttendanceEditorRow_(r);
     return row;
@@ -771,7 +1033,7 @@ function renderPayrollDayBody_() {
 }
 
 function renderAttendanceEditorRow_(r) {
-  return '<tr class="repeat-editor-row"><td colspan="5"><div class="repeat-editor">' +
+  return '<tr class="repeat-editor-row"><td colspan="7"><div class="repeat-editor">' +
     '<p class="hint" style="margin:0 0 8px;">Correct ' + r.name + '\'s log in/out for this day. Leave a field blank to clear it (for example, to undo an accidental tap).</p>' +
     '<div class="buttons" style="align-items:center;">' +
     '<label class="hint" style="margin:0;">Log in<br><input type="time" class="task-name-input" id="att-in-' + r.id + '" style="width:auto;" value="' + r.loginTime + '"></label>' +
@@ -917,7 +1179,11 @@ function renderAdmin() {
     tr.setAttribute('data-ti', ti);
     var checks = EMPLOYEES.map(function (emp) {
       var checked = t.assignments[emp.id] ? 'checked' : '';
-      return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + emp.id + '\',this.checked)"></td>';
+      var doneTime = (t.assignments[emp.id] && t.done && t.done[emp.id]) || '';
+      var doneBadge = t.assignments[emp.id]
+        ? '<div class="hint" style="margin-top:4px;"><a href="javascript:void(0)" onclick="toggleTaskDoneEditor_(' + ti + ',\'' + emp.id + '\')">' + (doneTime ? '✓ ' + doneTime.slice(0, 5) : 'Not done') + ' ✎</a></div>'
+        : '';
+      return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + emp.id + '\',this.checked)">' + doneBadge + '</td>';
     }).join('');
     var chipCls = 'repeat-chip' + (t.repeatDays && t.repeatDays.length ? ' active' : '');
     tr.innerHTML =
@@ -948,7 +1214,48 @@ function renderAdmin() {
         '</div></td>';
       body.appendChild(editorTr);
     }
+
+    if (openTaskDoneEditor && openTaskDoneEditor.ti === ti) {
+      var doneEditorTr = document.createElement('tr');
+      doneEditorTr.className = 'repeat-editor-row';
+      var empId = openTaskDoneEditor.empId;
+      var empName = (EMPLOYEES.filter(function (e) { return e.id === empId; })[0] || {}).name || '';
+      var curDone = ((t.done && t.done[empId]) || '').slice(0, 5);
+      doneEditorTr.innerHTML = '<td colspan="' + totalCols + '"><div class="repeat-editor">' +
+        '<p class="hint" style="margin:0 0 8px;">Correct when ' + empName + ' finished "' + t.name + '". Leave blank to clear (mark as not done) - for example to undo a task marked done by mistake.</p>' +
+        '<div class="buttons" style="align-items:center;">' +
+        '<input type="time" class="task-name-input" id="taskdone-input" style="width:auto;" value="' + curDone + '">' +
+        '<button type="button" class="btn primary" onclick="submitTaskDoneEdit_(' + ti + ',\'' + empId + '\')">Save</button>' +
+        '<button type="button" class="btn ghost" onclick="closeTaskDoneEditor_()">Cancel</button>' +
+        '</div></div></td>';
+      body.appendChild(doneEditorTr);
+    }
   });
+}
+
+// ---- Task-done time correction (admin) - saves immediately, only patches
+// the one task's `done` map in place so it never discards unsaved
+// assignment/name/repeat edits elsewhere on this same card. ----
+
+var openTaskDoneEditor = null; // {ti, empId} | null
+
+function toggleTaskDoneEditor_(ti, empId) {
+  openTaskDoneEditor = (openTaskDoneEditor && openTaskDoneEditor.ti === ti && openTaskDoneEditor.empId === empId)
+    ? null : { ti: ti, empId: empId };
+  renderAdmin();
+}
+function closeTaskDoneEditor_() { openTaskDoneEditor = null; renderAdmin(); }
+
+function submitTaskDoneEdit_(ti, empId) {
+  var val = document.getElementById('taskdone-input').value; // 'HH:MM', or '' to clear
+  var todayIso = ymd_(startOfDay_(new Date()));
+  if (currentEditorDate > todayIso) { alert('Can\'t set a task time for a future date.'); return; }
+  setTaskDoneForDate_(currentEditorDate, ti, empId, val ? val + ':00' : null);
+  tasks[ti].done = tasks[ti].done || {};
+  tasks[ti].done[empId] = val ? val + ':00' : null;
+  openTaskDoneEditor = null;
+  renderAdmin();
+  document.getElementById('save-status').textContent = 'Saved.';
 }
 
 function toggleAssign(ti, empId, val) { tasks[ti].assignments[empId] = val; tasksDirty = true; }
@@ -1070,7 +1377,11 @@ function applyStandingChange_(c) {
 
 function saveTasks() {
   computeStandingChanges_().forEach(applyStandingChange_);
-  state.days[currentEditorDate] = { tasks: tasks.map(function (t) { return { name: t.name, assignments: copyObj_(t.assignments) }; }) };
+  // Preserve each row's existing "done" times by position, same as the real
+  // writeTaskRows_ leaving the Done-at column alone for rows that still
+  // exist after a save - editing who's assigned must not erase completions.
+  var prevDone = (state.days[currentEditorDate] ? state.days[currentEditorDate].tasks : []).map(function (t) { return t.done || {}; });
+  state.days[currentEditorDate] = { tasks: tasks.map(function (t, ti) { return { name: t.name, assignments: copyObj_(t.assignments), done: prevDone[ti] || {} }; }) };
   applyAdminData_(computeAdminDataForDate_(currentEditorDate));
   document.getElementById('save-status').textContent = 'Saved to ' + formatDateLabel_(parseIso_(currentEditorDate)) + '.';
   renderStaff(); // today's task table may have just changed
@@ -1269,6 +1580,8 @@ function submitPlanTask() {
 
 // ---- Employee roster ----
 
+var openEmployeePinEditorId = null;
+
 function renderEmployeeList() {
   var body = document.getElementById('employee-body');
   body.innerHTML = '';
@@ -1276,9 +1589,38 @@ function renderEmployeeList() {
     var tr = document.createElement('tr');
     tr.innerHTML =
       '<td><input type="text" class="task-name-input" value="' + emp.name + '" autocapitalize="words" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value, this)"></td>' +
-      '<td><button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\')">✕</button></td>';
+      '<td>' + (emp.pin ? '<span class="hint">Set</span>' : '<span class="hint">Not set</span>') + '</td>' +
+      '<td><button class="btn ghost" onclick="toggleEmployeePinEditor_(\'' + emp.id + '\')">PIN</button> ' +
+      '<button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\')">✕</button></td>';
     body.appendChild(tr);
+
+    if (openEmployeePinEditorId === emp.id) {
+      var editorTr = document.createElement('tr');
+      editorTr.className = 'repeat-editor-row';
+      editorTr.innerHTML = '<td colspan="3"><div class="repeat-editor">' +
+        '<p class="hint" style="margin:0 0 8px;">Set or reset ' + emp.name + '\'s personal PIN (at least 4 characters) - this is what unlocks their own row on the Staff page. Leave blank and Save to remove their PIN (they can still use the admin PIN as a fallback).</p>' +
+        '<div class="buttons" style="align-items:center;">' +
+        '<input type="password" class="task-name-input" id="emppin-input-' + emp.id + '" placeholder="New PIN" style="width:140px;">' +
+        '<button type="button" class="btn primary" onclick="submitEmployeePin_(\'' + emp.id + '\')">Save</button>' +
+        '<button type="button" class="btn ghost" onclick="closeEmployeePinEditor_()">Cancel</button>' +
+        '</div></div></td>';
+      body.appendChild(editorTr);
+    }
   });
+}
+
+function toggleEmployeePinEditor_(id) { openEmployeePinEditorId = (openEmployeePinEditorId === id) ? null : id; renderEmployeeList(); }
+function closeEmployeePinEditor_() { openEmployeePinEditorId = null; renderEmployeeList(); }
+
+function submitEmployeePin_(id) {
+  var val = document.getElementById('emppin-input-' + id).value;
+  if (val && val.length < 4) { alert('PIN should be at least 4 characters.'); return; }
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp) return;
+  emp.pin = val;
+  openEmployeePinEditorId = null;
+  renderEmployeeList();
+  document.getElementById('employee-status').textContent = 'PIN saved.';
 }
 
 function addEmployeeFlow() {
@@ -1286,8 +1628,9 @@ function addEmployeeFlow() {
   var name = prompt("New employee's name:");
   if (!name) return;
   name = capitalizeWords_(name);
+  var empPin = prompt(name + "'s starting PIN (at least 4 characters, or leave blank to set later):");
   var id = 'EMP' + (employeeSeq++);
-  state.employees.push({ id: id, name: name, loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false });
+  state.employees.push({ id: id, name: name, pin: empPin || '', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false });
   state.completions[id] = {};
   Object.keys(state.days).forEach(function (iso) {
     state.days[iso].tasks.forEach(function (t) { t.assignments[id] = false; });

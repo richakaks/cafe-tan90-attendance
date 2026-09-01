@@ -34,11 +34,13 @@
 
     <div class="card">
       <h2>Employees</h2>
-      <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet.</p>
+      <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet. Each person's PIN is what unlocks their own row on the Staff page - the admin PIN also works for anyone, as a master override.</p>
+      <div class="table-scroll">
       <table>
-        <thead><tr><th>Name</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>PIN</th><th></th></tr></thead>
         <tbody id="employee-body"></tbody>
       </table>
+      </div>
       <div class="buttons">
         <button class="btn" onclick="addEmployeeFlow()">+ Add employee</button>
       </div>
@@ -56,10 +58,12 @@
         </div>
       </div>
       <p class="hint">Click <b>+ Add task</b> below to add a row, type its name, and tick who's doing it. Each row has a small <b>Repeats</b> button next to its name, it says "One-time" until you set it. Click it and tick the days of the week you want that task to happen on, for example Mon-Fri for "Make base milk", then it shows up on those days automatically, with no need to re-add it. Jump to any date with the picker above, including anything planned ahead, to view, edit, or delete it, not just today. <b>Nothing here is saved until you click "Save tasks" below.</b> That one click also applies any Repeats changes you made.</p>
+      <div class="table-scroll">
       <table>
         <thead id="admin-thead"></thead>
         <tbody id="admin-body"></tbody>
       </table>
+      </div>
       <div class="buttons">
         <button class="btn" onclick="addTaskRow()">+ Add task</button>
         <button class="btn" onclick="copyPreviousDay()">Copy previous day's tasks</button>
@@ -115,10 +119,12 @@
     <div class="card">
       <h2>Hourly rates</h2>
       <p class="hint">Set what each person earns per hour. A rate change can start today, be backdated, or be scheduled for a future date, so past pay never silently changes unless you mean it to.</p>
+      <div class="table-scroll">
       <table>
         <thead><tr><th>Name</th><th>Current rate</th><th></th></tr></thead>
         <tbody id="rates-body"></tbody>
       </table>
+      </div>
       <p class="hint" id="rates-status" style="margin-top:10px;"></p>
     </div>
 
@@ -133,10 +139,12 @@
         </div>
       </div>
       <p class="hint">Hours are exact to the minute, not rounded to a quarter hour, computed from actual log in/out times and paid at whatever rate applied that day. Missed or wrong punches can be corrected with the Edit button on any row, for any day.</p>
+      <div class="table-scroll">
       <table>
-        <thead><tr><th>Name</th><th>Hours</th><th>Rate</th><th>Pay</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Log in</th><th>Log out</th><th>Hours</th><th>Rate</th><th>Pay</th><th></th></tr></thead>
         <tbody id="payroll-day-body"></tbody>
       </table>
+      </div>
       <p class="hint" id="attendance-status" style="margin-top:10px;"></p>
     </div>
 
@@ -150,10 +158,12 @@
         </div>
       </div>
       <p class="hint">Running total for the month so far. Once the month ends, this number is the final total, nothing extra to do. Use the arrows above to look back at past months.</p>
+      <div class="table-scroll">
       <table>
         <thead><tr><th>Name</th><th>Hours</th><th>Pay</th></tr></thead>
         <tbody id="payroll-month-body"></tbody>
       </table>
+      </div>
       <p class="hint" id="payroll-month-total" style="margin-top:10px; text-align:right; font-weight:600;"></p>
     </div>
   </div>
@@ -242,7 +252,11 @@ function renderAdmin() {
     tr.setAttribute('data-ti', ti);
     var checks = EMPLOYEES.map(function (emp) {
       var checked = t.assignments[emp.id] ? 'checked' : '';
-      return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + emp.id + '\',this.checked)"></td>';
+      var doneTime = (t.assignments[emp.id] && t.done && t.done[emp.id]) || '';
+      var doneBadge = t.assignments[emp.id]
+        ? '<div class="hint" style="margin-top:4px;"><a href="javascript:void(0)" onclick="toggleTaskDoneEditor_(' + ti + ',\'' + emp.id + '\')">' + (doneTime ? '✓ ' + doneTime : 'Not done') + ' ✎</a></div>'
+        : '';
+      return '<td class="task-col"><input type="checkbox" ' + checked + ' onchange="toggleAssign(' + ti + ',\'' + emp.id + '\',this.checked)">' + doneBadge + '</td>';
     }).join('');
     var chipCls = 'repeat-chip' + (t.repeatDays && t.repeatDays.length ? ' active' : '');
     tr.innerHTML =
@@ -273,7 +287,52 @@ function renderAdmin() {
         '</div></td>';
       body.appendChild(editorTr);
     }
+
+    if (openTaskDoneEditor && openTaskDoneEditor.ti === ti) {
+      var doneEditorTr = document.createElement('tr');
+      doneEditorTr.className = 'repeat-editor-row';
+      var empId = openTaskDoneEditor.empId;
+      var empName = (EMPLOYEES.filter(function (e) { return e.id === empId; })[0] || {}).name || '';
+      var curDone = (t.done && t.done[empId]) || '';
+      doneEditorTr.innerHTML = '<td colspan="' + totalCols + '"><div class="repeat-editor">' +
+        '<p class="hint" style="margin:0 0 8px;">Correct when ' + empName + ' finished "' + t.name + '". Leave blank to clear (mark as not done) - for example to undo a task marked done by mistake.</p>' +
+        '<div class="buttons" style="align-items:center;">' +
+        '<input type="time" class="task-name-input" id="taskdone-input" style="width:auto;" value="' + curDone + '">' +
+        '<button type="button" class="btn primary" onclick="submitTaskDoneEdit_(' + ti + ',\'' + empId + '\')">Save</button>' +
+        '<button type="button" class="btn ghost" onclick="closeTaskDoneEditor_()">Cancel</button>' +
+        '</div></div></td>';
+      body.appendChild(doneEditorTr);
+    }
   });
+}
+
+// ---- Task-done time correction (admin) - same idea as the attendance-time
+// editor, but for a single task-completion tap. Deliberately does NOT go
+// through applyAdminData_/tasksDirty - it saves immediately (like the
+// attendance and rate editors), and only patches the one task's `done` map
+// in place, so it never discards any unsaved assignment/name/repeat edits
+// the admin might have in progress elsewhere on this same card. ----
+
+var openTaskDoneEditor = null; // {ti, empId} | null
+
+function toggleTaskDoneEditor_(ti, empId) {
+  openTaskDoneEditor = (openTaskDoneEditor && openTaskDoneEditor.ti === ti && openTaskDoneEditor.empId === empId)
+    ? null : { ti: ti, empId: empId };
+  renderAdmin();
+}
+function closeTaskDoneEditor_() { openTaskDoneEditor = null; renderAdmin(); }
+
+function submitTaskDoneEdit_(ti, empId) {
+  var val = document.getElementById('taskdone-input').value; // 'HH:mm', or '' to clear
+  document.getElementById('save-status').textContent = 'Saving…';
+  google.script.run.withSuccessHandler(function (data) {
+    if (data.tasks[ti]) tasks[ti].done = data.tasks[ti].done;
+    openTaskDoneEditor = null;
+    renderAdmin();
+    document.getElementById('save-status').textContent = 'Saved.';
+  }).withFailureHandler(function (e) {
+    document.getElementById('save-status').textContent = 'Could not save, ' + (e && e.message ? e.message : 'try again.');
+  }).setTaskDoneTime(pin, currentEditorDate, ti, empId, val);
 }
 
 function toggleAssign(ti, empId, val) { tasks[ti].assignments[empId] = val; tasksDirty = true; }
@@ -747,12 +806,12 @@ function loadPayrollDay_(iso) {
 function renderPayrollDayBody_() {
   var body = document.getElementById('payroll-day-body');
   if (!payrollDayRows.length) {
-    body.innerHTML = '<tr><td colspan="5" class="hint">No one logged in this day.</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="hint">No one logged in this day.</td></tr>';
     return;
   }
   body.innerHTML = payrollDayRows.map(function (r) {
     var editedNote = (r.loginEdited || r.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
-    var row = '<tr><td>' + r.name + editedNote + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
+    var row = '<tr><td>' + r.name + editedNote + '</td><td>' + (r.loginTime || '-') + '</td><td>' + (r.logoutTime || '-') + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
       '<td><button type="button" class="btn ghost" onclick="toggleAttendanceEditor_(\'' + r.id + '\')">Edit</button></td></tr>';
     if (openAttendanceEditorId === r.id) row += renderAttendanceEditorRow_(r);
     return row;
@@ -760,7 +819,7 @@ function renderPayrollDayBody_() {
 }
 
 function renderAttendanceEditorRow_(r) {
-  return '<tr class="repeat-editor-row"><td colspan="5"><div class="repeat-editor">' +
+  return '<tr class="repeat-editor-row"><td colspan="7"><div class="repeat-editor">' +
     '<p class="hint" style="margin:0 0 8px;">Correct ' + r.name + '\'s log in/out for this day. Leave a field blank to clear it (for example, to undo an accidental tap).</p>' +
     '<div class="buttons" style="align-items:center;">' +
     '<label class="hint" style="margin:0;">Log in<br><input type="time" class="task-name-input" id="att-in-' + r.id + '" style="width:auto;" value="' + r.loginTime + '"></label>' +
@@ -829,6 +888,8 @@ function payrollNextMonth() { payrollMonth.setMonth(payrollMonth.getMonth() + 1)
 
 // ---- Employee roster ----
 
+var openEmployeePinEditorId = null;
+
 function renderEmployeeList() {
   var body = document.getElementById('employee-body');
   body.innerHTML = '';
@@ -836,9 +897,41 @@ function renderEmployeeList() {
     var tr = document.createElement('tr');
     tr.innerHTML =
       '<td><input type="text" class="task-name-input" value="' + emp.name + '" autocapitalize="words" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value, this)"></td>' +
-      '<td><button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\', \'' + emp.name.replace(/'/g, "\\'") + '\')">✕</button></td>';
+      '<td>' + (emp.hasPin ? '<span class="hint">Set</span>' : '<span class="hint">Not set</span>') + '</td>' +
+      '<td><button class="btn ghost" onclick="toggleEmployeePinEditor_(\'' + emp.id + '\')">PIN</button> ' +
+      '<button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\', \'' + emp.name.replace(/'/g, "\\'") + '\')">✕</button></td>';
     body.appendChild(tr);
+
+    if (openEmployeePinEditorId === emp.id) {
+      var editorTr = document.createElement('tr');
+      editorTr.className = 'repeat-editor-row';
+      editorTr.innerHTML = '<td colspan="3"><div class="repeat-editor">' +
+        '<p class="hint" style="margin:0 0 8px;">Set or reset ' + emp.name + '\'s personal PIN (at least 4 characters) - this is what unlocks their own row on the Staff page. Leave blank and Save to remove their PIN (they can still use the admin PIN as a fallback).</p>' +
+        '<div class="buttons" style="align-items:center;">' +
+        '<input type="password" class="task-name-input" id="emppin-input-' + emp.id + '" placeholder="New PIN" style="width:140px;">' +
+        '<button type="button" class="btn primary" onclick="submitEmployeePin_(\'' + emp.id + '\')">Save</button>' +
+        '<button type="button" class="btn ghost" onclick="closeEmployeePinEditor_()">Cancel</button>' +
+        '</div></div></td>';
+      body.appendChild(editorTr);
+    }
   });
+}
+
+function toggleEmployeePinEditor_(id) { openEmployeePinEditorId = (openEmployeePinEditorId === id) ? null : id; renderEmployeeList(); }
+function closeEmployeePinEditor_() { openEmployeePinEditorId = null; renderEmployeeList(); }
+
+function submitEmployeePin_(id) {
+  var val = document.getElementById('emppin-input-' + id).value;
+  if (val && val.length < 4) { alert('PIN should be at least 4 characters.'); return; }
+  document.getElementById('employee-status').textContent = 'Saving PIN…';
+  google.script.run.withSuccessHandler(function (result) {
+    EMPLOYEES = result;
+    openEmployeePinEditorId = null;
+    renderEmployeeList();
+    document.getElementById('employee-status').textContent = 'PIN saved.';
+  }).withFailureHandler(function (e) {
+    document.getElementById('employee-status').textContent = 'Could not save PIN, ' + (e && e.message ? e.message : 'try again.');
+  }).setEmployeePin(pin, id, val);
 }
 
 function addEmployeeFlow() {
@@ -846,6 +939,7 @@ function addEmployeeFlow() {
   var name = prompt("New employee's name:");
   if (!name) return;
   name = capitalizeWords_(name);
+  var empPin = prompt(name + "'s starting PIN (at least 4 characters, or leave blank to set later):");
   document.getElementById('employee-status').textContent = 'Adding…';
   google.script.run.withSuccessHandler(function (result) {
     EMPLOYEES = result.employees;
@@ -861,7 +955,7 @@ function addEmployeeFlow() {
     document.getElementById('employee-status').textContent = 'Added ' + result.name + '.';
   }).withFailureHandler(function (e) {
     document.getElementById('employee-status').textContent = 'Could not add, ' + (e && e.message ? e.message : 'try again.');
-  }).addEmployee(pin, name);
+  }).addEmployee(pin, name, empPin || '');
 }
 
 function renameEmployeeFlow(id, newName, el) {

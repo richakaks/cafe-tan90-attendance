@@ -111,7 +111,7 @@ function defaultEmployeeSlots_() {
   var defaults = ['Miw', 'Nureen', 'Richa'];
   var slots = [];
   for (var i = 0; i < MAX_EMPLOYEES; i++) {
-    slots.push({ id: 'EMP' + (i + 1), name: defaults[i] || '', active: !!defaults[i] });
+    slots.push({ id: 'EMP' + (i + 1), name: defaults[i] || '', active: !!defaults[i], pin: '' });
   }
   return slots;
 }
@@ -144,9 +144,35 @@ function getActiveEmployeesWithIndex_() {
   var slots = getAllEmployeeSlots_();
   var result = [];
   slots.forEach(function (s, i) {
-    if (s.active) result.push({ id: s.id, name: s.name, idx: i });
+    if (s.active) result.push({ id: s.id, name: s.name, idx: i, pin: s.pin || '' });
   });
   return result;
+}
+
+// Checks suppliedPin against one employee's own PIN, OR the admin PIN as a
+// master override (covers a forgotten PIN, or admin acting on someone's
+// behalf) - used by every employee-facing write/read that needs to know
+// *which* employee is asking, not just that they know a valid PIN.
+function assertEmployeePin_(employeeId, suppliedPin) {
+  var slots = getAllEmployeeSlots_();
+  var slot = null;
+  for (var i = 0; i < slots.length; i++) {
+    if (slots[i].id === employeeId) { slot = slots[i]; break; }
+  }
+  if (!slot || !slot.active) throw new Error('Unknown employee.');
+  if (suppliedPin && suppliedPin === getAdminPin_()) return slot;
+  if (!slot.pin) throw new Error('No PIN set for this employee yet - ask admin to set one.');
+  if (suppliedPin !== slot.pin) throw new Error('Incorrect PIN.');
+  return slot;
+}
+
+// Verifies a PIN identifies this employee and returns just their public info
+// - what the Staff page calls to "unlock" someone's own row for the rest of
+// that page session (nothing is persisted server-side; the client re-sends
+// this same pin on every subsequent action for that person).
+function identifyEmployee(employeeId, pin) {
+  var slot = assertEmployeePin_(employeeId, pin);
+  return { id: slot.id, name: slot.name };
 }
 
 // ---- Standing (recurring) tasks -----------------------------------------
@@ -205,6 +231,8 @@ function applyStandingTasksToSheet_(sheet, date) {
     existingNames.push(key);
     nextRow++;
   });
+
+  applyTaskAssignedCheckboxes_(sheet);
 }
 
 // After a standing task is added or edited, push it onto today's tab and
@@ -282,10 +310,86 @@ function getOrCreateMonthSpreadsheet(monthStart) {
   return ss;
 }
 
+// Table 1's Present Today / Login Edited / Logout Edited columns are plain
+// booleans - switching them to Sheets' native checkboxes just changes how
+// they're rendered (an actual checkbox instead of the text "TRUE"/"FALSE"),
+// not the underlying value, so it's safe to call repeatedly on a sheet
+// that's already had real attendance written into it. Idempotent and cheap
+// (8 rows x 3 cols), so ensureDaySheet calls this every time it's asked for
+// a day's tab - including already-built tabs from before this existed -
+// rather than needing a separate one-time migration step.
+//
+// Only rows that have ever had real content get a checkbox - a spare,
+// never-used employee slot (blank name, no log in/out) is left fully blank
+// instead of showing an empty checkbox nobody can use. This is judged per
+// row from the row's own Name/Log In/Log Out cells, not from whether that
+// slot is a *currently* active employee - an employee removed mid-shift
+// still has real log-in/out data sitting in their row even after their name
+// goes blank (see SETUP.md), and that row must keep its checkboxes so that
+// data stays visible, not get silently cleared just because the name is gone.
+function applyAttendanceCheckboxes_(sheet) {
+  var rows = sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 3).getValues(); // name, log in, log out
+  for (var i = 0; i < MAX_EMPLOYEES; i++) {
+    var hasContent = !!(String(rows[i][0] || '').trim() || rows[i][1] || rows[i][2]);
+    var range = sheet.getRange(TABLE1_START_ROW + i, 5, 1, 3);
+    if (hasContent) {
+      range.insertCheckboxes();
+    } else {
+      range.removeCheckboxes();
+      range.clearContent();
+    }
+  }
+}
+
+// Same idea as applyAttendanceCheckboxes_, for Table 2's per-employee
+// column pair. A slot's "Assigned" / "Done at" sub-header labels and
+// Assigned checkboxes show if that employee slot is currently active
+// (header non-blank) OR - same historical-preservation reasoning as above -
+// if it's inactive but still holds real assigned/done data from before that
+// employee was removed. A slot that's simply never been used (inactive, and
+// never assigned anything) has both the sub-headers and the column left
+// fully blank, instead of showing "Assigned" / "Done at" labels over empty,
+// unusable columns.
+function applyTaskAssignedCheckboxes_(sheet) {
+  var rowCount = getTaskRowCount_(sheet);
+  var headers = sheet.getRange(TABLE2_HEADER_ROW, TABLE2_FIRST_EMP_COL, 1, MAX_EMPLOYEES * 2).getValues()[0];
+  var grid = rowCount ? sheet.getRange(TABLE2_TASKS_START_ROW, TABLE2_FIRST_EMP_COL, rowCount, MAX_EMPLOYEES * 2).getValues() : [];
+  for (var i = 0; i < MAX_EMPLOYEES; i++) {
+    var hasHeader = !!String(headers[i * 2] || '').trim();
+    var hasContent = hasHeader;
+    if (!hasContent) {
+      for (var r = 0; r < rowCount; r++) {
+        if (grid[r][i * 2] || grid[r][i * 2 + 1]) { hasContent = true; break; }
+      }
+    }
+
+    var subheaderRange = sheet.getRange(TABLE2_SUBHEADER_ROW, taskAssignedCol_(i), 1, 2);
+    if (hasContent) {
+      subheaderRange.setValues([['Assigned', 'Done at']]).setFontWeight('bold').setFontColor('#5C6370');
+    } else {
+      subheaderRange.clearContent();
+    }
+
+    if (rowCount) {
+      var range = sheet.getRange(TABLE2_TASKS_START_ROW, taskAssignedCol_(i), rowCount, 1);
+      if (hasContent) {
+        range.insertCheckboxes();
+      } else {
+        range.removeCheckboxes();
+        range.clearContent();
+      }
+    }
+  }
+}
+
 function ensureDaySheet(ss, date) {
   var name = dayTabName(date);
   var sheet = ss.getSheetByName(name);
-  if (sheet) return sheet;
+  if (sheet) {
+    applyAttendanceCheckboxes_(sheet);
+    applyTaskAssignedCheckboxes_(sheet);
+    return sheet;
+  }
 
   sheet = ss.insertSheet(name);
   var title = 'Attendance — ' + Utilities.formatDate(date, TIMEZONE, 'EEEE, MMMM d, yyyy');
@@ -303,6 +407,7 @@ function ensureDaySheet(ss, date) {
   sheet.getRange(TABLE1_START_ROW, 2, MAX_EMPLOYEES, 2).setNumberFormat('hh:mm:ss AM/PM');
   sheet.getRange(TABLE1_START_ROW, 4, MAX_EMPLOYEES, 1).setNumberFormat('0.00" hrs"');
   sheet.getRange(TABLE1_START_ROW, 5, MAX_EMPLOYEES, 3).setValue(false); // Present Today, Login Edited, Logout Edited
+  applyAttendanceCheckboxes_(sheet);
 
   // Table 2: tasks, one row per task (unlimited). Header row: task-name
   // label + each employee's name merged across a pair of columns.
@@ -311,8 +416,15 @@ function ensureDaySheet(ss, date) {
   slots.forEach(function (slot, i) {
     var col = taskAssignedCol_(i);
     sheet.getRange(TABLE2_HEADER_ROW, col, 1, 2).merge().setValue(slot.active ? slot.name : '').setFontWeight('bold');
-    sheet.getRange(TABLE2_SUBHEADER_ROW, col).setValue('Assigned').setFontWeight('bold').setFontColor('#5C6370');
-    sheet.getRange(TABLE2_SUBHEADER_ROW, col + 1).setValue('Done at').setFontWeight('bold').setFontColor('#5C6370');
+    // Only label an active slot's columns "Assigned" / "Done at" here - a
+    // spare, unused slot is left blank rather than showing those labels
+    // over columns nobody can fill in. applyTaskAssignedCheckboxes_ is what
+    // keeps this correct on every later visit too (a slot that becomes
+    // active or inactive after this day tab was already built).
+    if (slot.active) {
+      sheet.getRange(TABLE2_SUBHEADER_ROW, col).setValue('Assigned').setFontWeight('bold').setFontColor('#5C6370');
+      sheet.getRange(TABLE2_SUBHEADER_ROW, col + 1).setValue('Done at').setFontWeight('bold').setFontColor('#5C6370');
+    }
   });
   sheet.setColumnWidth(TABLE2_NAME_COL, 160);
   for (var c = 0; c < MAX_EMPLOYEES; c++) {
@@ -434,6 +546,8 @@ function writeTaskRows_(sheet, tasks, slots) {
     var extra = prevCount - newCount;
     sheet.getRange(TABLE2_TASKS_START_ROW + newCount, TABLE2_NAME_COL, extra, TABLE2_NUM_COLS).clearContent();
   }
+
+  applyTaskAssignedCheckboxes_(sheet);
 }
 
 // ---- Staff page API -------------------------------------------------------
@@ -478,7 +592,8 @@ function getStaffData() {
   };
 }
 
-function logAction(employeeId, action) {
+function logAction(employeeId, action, pin) {
+  assertEmployeePin_(employeeId, pin);
   var sheet = getTodaySheet();
   var slots = getAllEmployeeSlots_();
   var idx = slots.findIndex(function (s) { return s.id === employeeId && s.active; });
@@ -513,7 +628,8 @@ function logAction(employeeId, action) {
 // index within today's task list (see getStaffData) — it now maps to a
 // sheet row instead of a sheet column, but the client-facing meaning
 // ("which task in the list") is unchanged.
-function completeTask(employeeId, col) {
+function completeTask(employeeId, col, pin) {
+  assertEmployeePin_(employeeId, pin);
   var sheet = getTodaySheet();
   var slots = getAllEmployeeSlots_();
   var idx = slots.findIndex(function (s) { return s.id === employeeId && s.active; });
@@ -533,6 +649,59 @@ function completeTask(employeeId, col) {
   if (!doneCell.getValue()) {
     doneCell.setValue(new Date());
   }
+
+  return getStaffData();
+}
+
+// Lets an employee undo their OWN accidental tap - today only, and only a
+// plain clear (blank), never a specific corrected time. That distinction
+// matters: this is just reverting your own immediate mistake through the
+// normal one-shot mechanism, so it deliberately does NOT set the "edited"
+// flag used by admin corrections - only an admin typing in a specific
+// replacement time counts as a correction worth flagging. which: 'in'|'out'.
+function undoMyPunch(employeeId, pin, dateStr, which) {
+  assertEmployeePin_(employeeId, pin);
+  var todayIso = ymdFromDate_(new Date());
+  if (dateStr !== todayIso) throw new Error('Can only undo today\'s own entry.');
+
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId && s.active; });
+  if (idx === -1) throw new Error('Unknown or inactive employee: ' + employeeId);
+
+  var sheet = getSheetForDate(parseDateStr_(dateStr));
+  var row = TABLE1_START_ROW + idx;
+
+  if (which === 'in') {
+    sheet.getRange(row, 2).setValue('');
+  } else if (which === 'out') {
+    sheet.getRange(row, 3).setValue('');
+  } else {
+    throw new Error('Unknown field.');
+  }
+  var stillIn = sheet.getRange(row, 2).getValue();
+  sheet.getRange(row, 5).setValue(!!stillIn); // Present Today follows login, same as a normal tap
+
+  return getStaffData();
+}
+
+// Same idea as undoMyPunch but for a "Mark done" tap - today only, plain
+// clear, no edited flag (task completions don't carry an edited marker at
+// all; only attendance times do, since only those feed payroll).
+function undoMyTaskDone(employeeId, pin, dateStr, col) {
+  assertEmployeePin_(employeeId, pin);
+  var todayIso = ymdFromDate_(new Date());
+  if (dateStr !== todayIso) throw new Error('Can only undo today\'s own entry.');
+
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId && s.active; });
+  if (idx === -1) throw new Error('Unknown or inactive employee: ' + employeeId);
+
+  var sheet = getSheetForDate(parseDateStr_(dateStr));
+  var rowCount = getTaskRowCount_(sheet);
+  if (col < 0 || col >= rowCount) throw new Error('Invalid task.');
+
+  var taskRow = TABLE2_TASKS_START_ROW + col;
+  sheet.getRange(taskRow, taskDoneCol_(idx)).setValue('');
 
   return getStaffData();
 }
@@ -590,11 +759,17 @@ function getAdminData(pin, dateStr) {
   var tasks = [];
   for (var r = 0; r < taskRows.count; r++) {
     var assignments = {};
-    activeEmployees.forEach(function (emp) { assignments[emp.id] = !!taskRows.assigned[r][emp.idx]; });
+    var done = {};
+    activeEmployees.forEach(function (emp) {
+      assignments[emp.id] = !!taskRows.assigned[r][emp.idx];
+      var doneVal = taskRows.done[r][emp.idx];
+      done[emp.id] = doneVal ? Utilities.formatDate(doneVal, TIMEZONE, 'HH:mm') : null;
+    });
     var match = standingByName[String(taskRows.names[r]).trim().toLowerCase()];
     tasks.push({
       name: taskRows.names[r],
       assignments: assignments,
+      done: done,
       standing: match ? { id: match.id, days: match.days } : null
     });
   }
@@ -605,7 +780,14 @@ function getAdminData(pin, dateStr) {
     dateLabel: Utilities.formatDate(date, TIMEZONE, 'EEEE, MMMM d, yyyy'),
     isToday: thisIso === todayIso,
     tasks: tasks,
-    employees: activeEmployees.map(function (e) { return { id: e.id, name: e.name }; })
+    // hasPin included so the Employees section's Set/Not set column stays
+    // correct across every admin-data reload (page load, date navigation,
+    // Save tasks), not just right after actually changing a PIN - the
+    // client's EMPLOYEES array is refreshed from this same payload every
+    // time, and previously this omitted hasPin, silently reverting every
+    // row to "Not set" on the very next reload even though the PIN was
+    // still saved server-side.
+    employees: activeEmployees.map(function (e) { return { id: e.id, name: e.name, hasPin: !!e.pin }; })
   };
 }
 
@@ -694,6 +876,7 @@ function planTask(pin, name, assignments, dates) {
       });
     }
 
+    applyTaskAssignedCheckboxes_(sheet);
     applied.push(dateStr);
   });
 
@@ -741,23 +924,61 @@ function copyPreviousDayTasks(pin, dateStr) {
 
 function listEmployees(pin) {
   assertPin_(pin);
-  return getActiveEmployeesWithIndex_().map(function (e) { return { id: e.id, name: e.name }; });
+  return getActiveEmployeesWithIndex_().map(function (e) { return { id: e.id, name: e.name, hasPin: !!e.pin }; });
 }
 
-function addEmployee(pin, name) {
+function addEmployee(pin, name, employeePin) {
   assertPin_(pin);
   name = (name || '').trim();
   if (!name) throw new Error('Enter a name.');
+  employeePin = (employeePin || '').trim();
+  if (employeePin && employeePin.length < 4) throw new Error('PIN should be at least 4 characters.');
 
   var slots = getAllEmployeeSlots_();
   var freeIdx = slots.findIndex(function (s) { return !s.active; });
   if (freeIdx === -1) throw new Error('Max ' + MAX_EMPLOYEES + ' employees. Remove someone first.');
 
-  slots[freeIdx] = { id: slots[freeIdx].id, name: name, active: true };
+  slots[freeIdx] = { id: slots[freeIdx].id, name: name, active: true, pin: employeePin };
   saveEmployeeSlots_(slots);
   syncEmployeeNamesForRestOfMonth_();
 
   return { id: slots[freeIdx].id, name: name, employees: listEmployees(pin) };
+}
+
+// Admin sets or resets an employee's personal PIN (used both to give a new
+// hire their first PIN and to reset one someone's forgotten). '' clears it,
+// which locks that employee out of self-service until a PIN is set again —
+// the admin PIN still works for them via assertEmployeePin_'s master override
+// either way, so removing a PIN never locks admin out of helping them.
+function setEmployeePin(pin, employeeId, newPin) {
+  assertPin_(pin);
+  newPin = (newPin || '').trim();
+  if (newPin && newPin.length < 4) throw new Error('PIN should be at least 4 characters.');
+
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId; });
+  if (idx === -1 || !slots[idx].active) throw new Error('Unknown employee.');
+
+  slots[idx].pin = newPin;
+  saveEmployeeSlots_(slots);
+  return listEmployees(pin);
+}
+
+// Self-service PIN change: currentPin can be the employee's own PIN OR the
+// admin PIN (so admin can also walk someone through setting a fresh PIN from
+// this same flow without needing the separate Employees-section control).
+function changeMyPin(employeeId, currentPin, newPin) {
+  assertEmployeePin_(employeeId, currentPin);
+  newPin = (newPin || '').trim();
+  if (!newPin || newPin.length < 4) throw new Error('PIN should be at least 4 characters.');
+
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId; });
+  if (idx === -1 || !slots[idx].active) throw new Error('Unknown employee.');
+
+  slots[idx].pin = newPin;
+  saveEmployeeSlots_(slots);
+  return { ok: true };
 }
 
 function renameEmployee(pin, id, newName) {
@@ -982,6 +1203,66 @@ function getPayrollForMonth(pin, monthIso) {
     .map(function (t) { return { id: t.id, name: t.name, hours: round2_(t.hours), hoursLabel: formatHoursMins_(t.hours), pay: round2_(t.pay) }; });
 }
 
+// ---- Employee self-service: personal payroll view --------------------------
+// Same shape/computation as getPayrollDay / getPayrollForMonth, just
+// authenticated with the employee's own PIN (or the admin PIN) instead of
+// the admin PIN alone, and filtered down to that one employee's row/total -
+// this is what powers each employee's private "my hours & pay" view, which
+// per design nobody else (besides admin) can see.
+
+function getMyPayrollDay(employeeId, pin, dateStr) {
+  var slot = assertEmployeePin_(employeeId, pin);
+  var date = dateStr ? parseDateStr_(dateStr) : new Date();
+  var sheet = getSheetForDate(date);
+  var slots = getAllEmployeeSlots_();
+  var thisIso = ymdFromDate_(date);
+  var dayRows = computePayrollDay_(sheet, thisIso, slots);
+  var idx = slots.findIndex(function (s) { return s.id === employeeId; });
+  var r = dayRows[idx];
+
+  var todayIso = ymdFromDate_(new Date());
+  return {
+    date: thisIso,
+    dateLabel: Utilities.formatDate(date, TIMEZONE, 'EEEE, MMMM d, yyyy'),
+    isToday: thisIso === todayIso,
+    rows: [{
+      id: slot.id,
+      name: r.name || slot.name,
+      hours: round2_(r.hours),
+      hoursLabel: formatHoursMins_(r.hours),
+      rate: r.rate,
+      pay: round2_(r.pay),
+      loginTime: r.inTime ? Utilities.formatDate(r.inTime, TIMEZONE, 'HH:mm') : '',
+      logoutTime: r.outTime ? Utilities.formatDate(r.outTime, TIMEZONE, 'HH:mm') : '',
+      loginEdited: r.loginEdited,
+      logoutEdited: r.logoutEdited
+    }]
+  };
+}
+
+function getMyPayrollForMonth(employeeId, pin, monthIso) {
+  var slot = assertEmployeePin_(employeeId, pin);
+  var parts = String(monthIso).split('-');
+  var monthStart = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+  var ss = getOrCreateMonthSpreadsheet(monthStart);
+  var total = daysInMonth(monthStart);
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId; });
+
+  var hours = 0, pay = 0;
+  for (var day = 1; day <= total; day++) {
+    var d = new Date(monthStart);
+    d.setDate(d.getDate() + (day - 1));
+    var dateStr = ymdFromDate_(d);
+    var sheet = ensureDaySheet(ss, d);
+    var r = computePayrollDay_(sheet, dateStr, slots)[idx];
+    hours += r.hours;
+    pay += r.pay;
+  }
+
+  return [{ id: slot.id, name: slot.name, hours: round2_(hours), hoursLabel: formatHoursMins_(hours), pay: round2_(pay) }];
+}
+
 // Current rate (as of today) + soonest upcoming scheduled change, if any,
 // for every active employee — what the rate-editor card shows.
 function getWageRatesInfo(pin) {
@@ -1077,6 +1358,42 @@ function setAttendanceTimes(pin, employeeId, dateStr, loginTimeStr, logoutTimeSt
   sheet.getRange(row, 5).setValue(!!newLogin);
 
   return getPayrollDay(pin, dateStr);
+}
+
+// Admin-only correction for a task's "Done at" time - same idea as
+// setAttendanceTimes, but for a task-completion tap instead of a punch.
+// Lets admin fix a task that got marked done at the wrong time, or clear one
+// that was tapped by accident, for any day up to today. doneTimeStr: 'HH:mm',
+// or '' / falsy to clear it. No "edited" flag on tasks (see undoMyTaskDone) -
+// this is a lighter-weight correction than attendance since it doesn't feed
+// payroll.
+function setTaskDoneTime(pin, dateStr, col, employeeId, doneTimeStr) {
+  assertPin_(pin);
+  if (!dateStr) throw new Error('Pick a date.');
+  var todayIso = ymdFromDate_(new Date());
+  if (dateStr > todayIso) throw new Error('Can\'t set a task time for a future date.');
+
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId; });
+  if (idx === -1) throw new Error('Unknown employee.');
+
+  var date = parseDateStr_(dateStr);
+  var sheet = getSheetForDate(date);
+  var rowCount = getTaskRowCount_(sheet);
+  if (col < 0 || col >= rowCount) throw new Error('Invalid task.');
+
+  var newDone = null;
+  if (doneTimeStr) {
+    var parts = String(doneTimeStr).split(':');
+    var h = Number(parts[0]), m = Number(parts[1]);
+    if (isNaN(h) || isNaN(m)) throw new Error('Invalid time.');
+    newDone = new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, m, 0);
+  }
+
+  var taskRow = TABLE2_TASKS_START_ROW + col;
+  sheet.getRange(taskRow, taskDoneCol_(idx)).setValue(newDone || '');
+
+  return getAdminData(pin, dateStr);
 }
 
 /**

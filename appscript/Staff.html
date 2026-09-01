@@ -21,27 +21,84 @@
   <!-- STAFF VIEW -->
   <div class="view active" id="view-staff">
 
+    <div class="card" id="whoami-card">
+      <div id="whoami-locked">
+        <h2>Who are you?</h2>
+        <p class="hint">Everyone can see this page, but you need your own PIN to log yourself in/out or mark your own tasks done - it keeps people from tapping each other's buttons by accident. Your admin's PIN also works here if you've forgotten yours.</p>
+        <div class="buttons" style="align-items:center;">
+          <select id="whoami-select" class="task-name-input" style="width:auto;"></select>
+          <input type="password" id="whoami-pin" placeholder="Your PIN" maxlength="12" style="width:auto;" onkeydown="if(event.key==='Enter')identifyMe();">
+          <button class="btn primary" onclick="identifyMe()">Continue</button>
+        </div>
+        <p class="hint" id="whoami-status" style="margin-top:8px;"></p>
+      </div>
+      <div id="whoami-unlocked" style="display:none;">
+        <p class="hint" style="margin:0;">Signed in as <b id="whoami-name"></b>. &nbsp;
+          <a href="javascript:void(0)" onclick="toggleMyHours()">My hours &amp; pay</a> &nbsp;·&nbsp;
+          <a href="javascript:void(0)" onclick="switchUser()">Switch user</a>
+        </p>
+      </div>
+    </div>
+
+    <div class="card" id="myhours-card" style="display:none;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+        <h2 style="margin:0;">My hours &amp; pay</h2>
+        <div class="buttons" style="margin:0;">
+          <button class="btn ghost" onclick="myPayrollPrevDay()">‹ Prev day</button>
+          <button class="btn ghost" onclick="myPayrollGoToday()">Today</button>
+          <button class="btn ghost" onclick="myPayrollNextDay()">Next day ›</button>
+        </div>
+      </div>
+      <p class="hint" id="myhours-day-label">-</p>
+      <div class="table-scroll">
+      <table>
+        <thead><tr><th>Log in</th><th>Log out</th><th>Hours</th><th>Rate</th><th>Pay</th></tr></thead>
+        <tbody id="myhours-day-body"></tbody>
+      </table>
+      </div>
+
+      <h2 style="margin-top:20px;">This month so far</h2>
+      <div class="table-scroll">
+      <table>
+        <thead><tr><th>Hours</th><th>Pay</th></tr></thead>
+        <tbody id="myhours-month-body"></tbody>
+      </table>
+      </div>
+
+      <p class="hint" style="margin-top:20px;">Change my PIN</p>
+      <div class="buttons" style="align-items:center;">
+        <input type="password" id="mypin-current" class="task-name-input" placeholder="Current PIN" style="width:auto;">
+        <input type="password" id="mypin-new" class="task-name-input" placeholder="New PIN (4+ chars)" style="width:auto;">
+        <button class="btn" onclick="changeMyPinFlow()">Change PIN</button>
+      </div>
+      <p class="hint" id="myhours-status" style="margin-top:10px;"></p>
+    </div>
+
     <div class="card">
       <div class="date-banner">
         <span class="day" id="today-day">-</span>
         <span class="date" id="today-date">-</span>
       </div>
-      <p class="hint">Times are logged to the second, straight into today's Google Sheet.</p>
+      <p class="hint">Times are logged to the second, straight into today's Google Sheet. Only your own row unlocks once you've identified yourself above - everyone else's stays visible but locked.</p>
+      <div class="table-scroll">
       <table>
         <thead>
           <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th></tr>
         </thead>
         <tbody id="attendance-body"></tbody>
       </table>
+      </div>
     </div>
 
     <div class="card task-table-wrap">
       <h2>Today's tasks</h2>
-      <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in. Tap "Mark done" as each task gets finished.</p>
+      <p class="hint">Set by the admin each morning. Each person's column lights up once they've logged in. Tap "Mark done" as each task gets finished - you can only mark your own.</p>
+      <div class="table-scroll">
       <table>
         <thead id="task-thead"></thead>
         <tbody id="task-body"></tbody>
       </table>
+      </div>
     </div>
 
   </div>
@@ -70,33 +127,106 @@ function showView(name) {
   if (new URLSearchParams(window.location.search).get('page') === 'admin') showView('admin');
 })();
 
+function pad2_(n) { return n < 10 ? '0' + n : '' + n; }
+function ymd_(d) { return d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate()); }
+function startOfDay_(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+function shiftIso_(iso, delta) {
+  var parts = iso.split('-').map(Number);
+  var d = new Date(parts[0], parts[1] - 1, parts[2]);
+  d.setDate(d.getDate() + delta);
+  return ymd_(d);
+}
+
 var lastData = null;
 var busy = false;
+
+// ---- Identity: who's currently unlocked on this device, for this page load
+// only. Nothing is remembered across visits (no localStorage) — reloading
+// or tapping "Switch user" always starts fresh, so a shared or borrowed
+// phone never carries over someone else's identity. myPin is kept in memory
+// and re-sent with every action for myId so the server can verify it's
+// really that person each time, not just once at identify time. ----
+var myId = null;
+var myPin = null;
+
+function populateWhoamiSelect_(employees) {
+  if (myId) return; // don't touch the picker once someone's identified
+  var sel = document.getElementById('whoami-select');
+  var cur = sel.value;
+  sel.innerHTML = employees.map(function (e) { return '<option value="' + e.id + '">' + e.name + '</option>'; }).join('');
+  if (cur) sel.value = cur;
+}
+
+function identifyMe() {
+  var id = document.getElementById('whoami-select').value;
+  var val = document.getElementById('whoami-pin').value;
+  if (!id) return;
+  document.getElementById('whoami-status').textContent = '';
+  google.script.run.withSuccessHandler(function (info) {
+    myId = info.id;
+    myPin = val;
+    document.getElementById('whoami-pin').value = '';
+    document.getElementById('whoami-locked').style.display = 'none';
+    document.getElementById('whoami-unlocked').style.display = 'block';
+    document.getElementById('whoami-name').textContent = info.name;
+    if (lastData) render(lastData);
+  }).withFailureHandler(function (e) {
+    document.getElementById('whoami-status').textContent = (e && e.message) ? e.message : 'Incorrect PIN.';
+  }).identifyEmployee(id, val);
+}
+
+function switchUser() {
+  myId = null;
+  myPin = null;
+  document.getElementById('whoami-locked').style.display = 'block';
+  document.getElementById('whoami-unlocked').style.display = 'none';
+  document.getElementById('myhours-card').style.display = 'none';
+  if (lastData) render(lastData);
+}
 
 function refresh() {
   google.script.run.withSuccessHandler(render).withFailureHandler(onError).getStaffData();
 }
 
 function logIn(id) {
-  if (busy) return;
+  if (busy || !myId) return;
   busy = true;
   google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
     .withFailureHandler(function (e) { busy = false; onError(e); })
-    .logAction(id, 'in');
+    .logAction(id, 'in', myPin);
 }
 function logOut(id) {
-  if (busy) return;
+  if (busy || !myId) return;
   busy = true;
   google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
     .withFailureHandler(function (e) { busy = false; onError(e); })
-    .logAction(id, 'out');
+    .logAction(id, 'out', myPin);
 }
 function markDone(id, col) {
-  if (busy) return;
+  if (busy || !myId) return;
   busy = true;
   google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
     .withFailureHandler(function (e) { busy = false; onError(e); })
-    .completeTask(id, col);
+    .completeTask(id, col, myPin);
+}
+
+// Same-day self-undo — reverts your own accidental tap (plain clear, not a
+// specific corrected time; only admin can type in a replacement time).
+function undoPunch(which) {
+  if (busy || !myId) return;
+  busy = true;
+  var dateStr = ymd_(startOfDay_(new Date()));
+  google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
+    .withFailureHandler(function (e) { busy = false; onError(e); })
+    .undoMyPunch(myId, myPin, dateStr, which);
+}
+function undoTaskDone(col) {
+  if (busy || !myId) return;
+  busy = true;
+  var dateStr = ymd_(startOfDay_(new Date()));
+  google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
+    .withFailureHandler(function (e) { busy = false; onError(e); })
+    .undoMyTaskDone(myId, myPin, dateStr, col);
 }
 
 function onError(e) {
@@ -107,18 +237,36 @@ function render(data) {
   lastData = data;
   document.getElementById('today-day').textContent = data.day;
   document.getElementById('today-date').textContent = data.date;
+  populateWhoamiSelect_(data.employees);
 
   var body = document.getElementById('attendance-body');
   body.innerHTML = '';
   data.employees.forEach(function (emp) {
+    var isMe = !!(myId && emp.id === myId);
+    var locked = !isMe;
     var tr = document.createElement('tr');
+    if (locked) tr.className = 'row-locked';
+
+    var loginCell;
+    if (emp.loginTime) {
+      loginCell = '<button class="time-btn logged" disabled>In · ' + emp.loginTime + '</button>' +
+        (isMe ? ' <a href="javascript:void(0)" class="hint" onclick="undoPunch(\'in\')">Undo</a>' : '');
+    } else {
+      loginCell = '<button class="time-btn primary" ' + (isMe ? '' : 'disabled') + ' onclick="logIn(\'' + emp.id + '\')">Log in</button>';
+    }
+    var logoutCell;
+    if (emp.logoutTime) {
+      logoutCell = '<button class="time-btn out-logged" disabled>Out · ' + emp.logoutTime + '</button>' +
+        (isMe ? ' <a href="javascript:void(0)" class="hint" onclick="undoPunch(\'out\')">Undo</a>' : '');
+    } else {
+      logoutCell = '<button class="time-btn" ' + (!emp.loginTime || !isMe ? 'disabled' : '') + ' onclick="logOut(\'' + emp.id + '\')">Log out</button>';
+    }
+
     tr.innerHTML =
-      '<td class="name-cell">' + emp.name + '</td>' +
+      '<td class="name-cell">' + emp.name + (locked ? ' <span class="hint">🔒</span>' : '') + '</td>' +
       '<td><span class="pill ' + (emp.present ? 'present' : 'absent') + '">' + (emp.present ? 'Present' : 'Not in yet') + '</span></td>' +
-      '<td><button class="time-btn ' + (emp.loginTime ? 'logged' : 'primary') + '" ' + (emp.loginTime ? 'disabled' : '') +
-        ' onclick="logIn(\'' + emp.id + '\')">' + (emp.loginTime ? 'In · ' + emp.loginTime : 'Log in') + '</button></td>' +
-      '<td><button class="time-btn ' + (emp.logoutTime ? 'out-logged' : '') + '" ' + (!emp.loginTime || emp.logoutTime ? 'disabled' : '') +
-        ' onclick="logOut(\'' + emp.id + '\')">' + (emp.logoutTime ? 'Out · ' + emp.logoutTime : 'Log out') + '</button></td>';
+      '<td>' + loginCell + '</td>' +
+      '<td>' + logoutCell + '</td>';
     body.appendChild(tr);
   });
 
@@ -145,15 +293,77 @@ function renderTaskTable(employees) {
     var taskName = employees[0].tasks[ti].name;
     var cells = employees.map(function (emp) {
       var t = emp.tasks[ti];
+      var isMe = !!(myId && emp.id === myId);
       var faded = !emp.present ? ' emp-faded' : '';
       if (!t.assigned) return '<td class="task-col' + faded + '"><span class="not-applicable">–</span></td>';
-      if (t.completedAt) return '<td class="task-col' + faded + '"><span class="task-done-pill">✓ Done · ' + t.completedAt + '</span></td>';
-      return '<td class="task-col' + faded + '"><button class="task-btn" ' + (!emp.present ? 'disabled' : '') +
+      if (t.completedAt) {
+        var undoLink = isMe ? ' <a href="javascript:void(0)" class="hint" onclick="undoTaskDone(' + t.col + ')">Undo</a>' : '';
+        return '<td class="task-col' + faded + '"><span class="task-done-pill">✓ Done · ' + t.completedAt + '</span>' + undoLink + '</td>';
+      }
+      return '<td class="task-col' + faded + '"><button class="task-btn" ' + (!emp.present || !isMe ? 'disabled' : '') +
         ' onclick="markDone(\'' + emp.id + '\',' + t.col + ')">Mark done</button></td>';
     }).join('');
     tr.innerHTML = '<td class="name-cell">' + taskName + '</td>' + cells;
     tbody.appendChild(tr);
   }
+}
+
+// ---- My hours & pay (personal view — private to whoever's identified) ----
+
+var myPayrollDayIso = null;
+
+function toggleMyHours() {
+  var card = document.getElementById('myhours-card');
+  var showing = card.style.display !== 'none';
+  card.style.display = showing ? 'none' : 'block';
+  if (!showing) {
+    myPayrollDayIso = ymd_(startOfDay_(new Date()));
+    loadMyPayrollDay_(myPayrollDayIso);
+    loadMyPayrollMonth_(myPayrollMonthIso_());
+  }
+}
+
+function loadMyPayrollDay_(iso) {
+  myPayrollDayIso = iso;
+  google.script.run.withSuccessHandler(function (data) {
+    document.getElementById('myhours-day-label').textContent = data.dateLabel + (data.isToday ? ' (today)' : '');
+    var r = data.rows[0];
+    var editedNote = (r.loginEdited || r.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    document.getElementById('myhours-day-body').innerHTML =
+      '<tr><td>' + (r.loginTime || '-') + '</td><td>' + (r.logoutTime || '-') + '</td><td>' + r.hoursLabel + editedNote + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td></tr>';
+  }).withFailureHandler(function () {
+    document.getElementById('myhours-day-body').innerHTML = '<tr><td colspan="5" class="hint">Could not load that day.</td></tr>';
+  }).getMyPayrollDay(myId, myPin, iso);
+}
+function myPayrollPrevDay() { loadMyPayrollDay_(shiftIso_(myPayrollDayIso, -1)); }
+function myPayrollNextDay() { loadMyPayrollDay_(shiftIso_(myPayrollDayIso, 1)); }
+function myPayrollGoToday() { loadMyPayrollDay_(ymd_(startOfDay_(new Date()))); }
+
+function myPayrollMonthIso_() { var d = new Date(); return d.getFullYear() + '-' + pad2_(d.getMonth() + 1); }
+function loadMyPayrollMonth_(monthIso) {
+  google.script.run.withSuccessHandler(function (rows) {
+    var r = rows && rows[0];
+    document.getElementById('myhours-month-body').innerHTML = r ?
+      ('<tr><td>' + r.hoursLabel + '</td><td>฿' + r.pay.toFixed(2) + '</td></tr>') :
+      '<tr><td colspan="2" class="hint">No hours yet this month.</td></tr>';
+  }).withFailureHandler(function () {
+    document.getElementById('myhours-month-body').innerHTML = '<tr><td colspan="2" class="hint">Could not load.</td></tr>';
+  }).getMyPayrollForMonth(myId, myPin, monthIso);
+}
+
+function changeMyPinFlow() {
+  var cur = document.getElementById('mypin-current').value;
+  var next = document.getElementById('mypin-new').value;
+  if (!next || next.length < 4) { alert('New PIN should be at least 4 characters.'); return; }
+  document.getElementById('myhours-status').textContent = 'Saving…';
+  google.script.run.withSuccessHandler(function () {
+    myPin = next;
+    document.getElementById('mypin-current').value = '';
+    document.getElementById('mypin-new').value = '';
+    document.getElementById('myhours-status').textContent = 'PIN changed.';
+  }).withFailureHandler(function (e) {
+    document.getElementById('myhours-status').textContent = (e && e.message) ? e.message : 'Could not change PIN.';
+  }).changeMyPin(myId, cur, next);
 }
 
 refresh();
