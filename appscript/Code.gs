@@ -385,9 +385,26 @@ function applyTaskAssignedCheckboxes_(sheet) {
 function ensureDaySheet(ss, date) {
   var name = dayTabName(date);
   var sheet = ss.getSheetByName(name);
+  // Deliberately NOT re-applying checkbox/sub-header formatting here on an
+  // already-existing tab. ensureDaySheet() sits behind nearly every backend
+  // call (getStaffData alone is polled every 15s from the Staff page - see
+  // Staff.html - and getPayrollForMonth calls this once per day in a month,
+  // up to ~31 times in a single request), so doing it here meant every read,
+  // not just every write, paid for ~15-25 blocking Sheets API calls (each
+  // insertCheckboxes/removeCheckboxes/setValues round-trip has real latency)
+  // even when nothing about that formatting had changed. This was traced to
+  // real, reported site-wide lag and removed as the fix.
+  // The formatting still gets applied everywhere it can actually go stale:
+  // at creation (below), after an admin attendance correction that can
+  // resurrect a since-blanked row (setAttendanceTimes), after a roster
+  // change that can flip a slot active/inactive on already-built tabs
+  // (syncEmployeeNamesForRestOfMonth_), and after anything that changes
+  // task rows/assignments (writeTaskRows_, applyStandingTasksToSheet_,
+  // planTask). A plain punch or task-done tap never needs it: an active
+  // employee's row/column already got its checkbox at sheet-creation time
+  // (their name alone is enough "content" to qualify), and a punch/done tap
+  // never changes whether a row/column *qualifies* for one.
   if (sheet) {
-    applyAttendanceCheckboxes_(sheet);
-    applyTaskAssignedCheckboxes_(sheet);
     return sheet;
   }
 
@@ -476,6 +493,12 @@ function syncEmployeeNamesForRestOfMonth_() {
     slots.forEach(function (slot, i) {
       sheet.getRange(TABLE2_HEADER_ROW, taskAssignedCol_(i)).setValue(slot.active ? slot.name : '');
     });
+    // A roster change is the one thing that can flip a slot active/inactive
+    // on an already-built tab, which is exactly what the checkbox/sub-header
+    // "has real content" test depends on - reapply here, once per affected
+    // day, rather than on every future read of that tab.
+    applyAttendanceCheckboxes_(sheet);
+    applyTaskAssignedCheckboxes_(sheet);
   }
 }
 
@@ -1356,6 +1379,11 @@ function setAttendanceTimes(pin, employeeId, dateStr, loginTimeStr, logoutTimeSt
   // normal tap on the Staff page would - so filling in a missed log-in also
   // makes that day's task-marking work, and clearing one un-marks present.
   sheet.getRange(row, 5).setValue(!!newLogin);
+  // A correction can be the first real content a since-removed employee's
+  // row has had since it went blank (checkbox-and-content-cleared by
+  // applyAttendanceCheckboxes_) - reapply here so columns 5-7 render as
+  // checkboxes again instead of raw TRUE/FALSE text on just this row's tab.
+  applyAttendanceCheckboxes_(sheet);
 
   return getPayrollDay(pin, dateStr);
 }
@@ -1392,6 +1420,11 @@ function setTaskDoneTime(pin, dateStr, col, employeeId, doneTimeStr) {
 
   var taskRow = TABLE2_TASKS_START_ROW + col;
   sheet.getRange(taskRow, taskDoneCol_(idx)).setValue(newDone || '');
+  // Same reasoning as setAttendanceTimes: this can be the first real content
+  // a since-blanked slot has had (a since-removed employee's old column), so
+  // reapply to restore its "Assigned"/"Done at" sub-header labels rather than
+  // leaving a real timestamp sitting under a blank header.
+  applyTaskAssignedCheckboxes_(sheet);
 
   return getAdminData(pin, dateStr);
 }
