@@ -86,6 +86,24 @@ var TABLE2_NUM_COLS = TABLE2_FIRST_EMP_COL - 1 + MAX_EMPLOYEES * 2; // name col 
 function taskAssignedCol_(slotIdx) { return TABLE2_FIRST_EMP_COL + slotIdx * 2; }
 function taskDoneCol_(slotIdx) { return taskAssignedCol_(slotIdx) + 1; }
 
+// Table 3 (Breaks): for employees with "Flexible hours" turned on (see the
+// employee roster below) — an unpaid break during the day (stepping out for
+// a couple hours) that should NOT count as worked time. Lives on the same
+// per-day tab as Tables 1/2, but in its own columns to the right of Table 2
+// (leaving one blank column as a gap), rather than below either table — that
+// way it can never collide with Table 2's own unbounded downward row growth,
+// since the two tables occupy disjoint column ranges. One row per break
+// instance: Employee ID, Break Start, Break End (blank while the break is
+// still open). Rows are NOT assumed contiguous like Table 2's task rows — an
+// admin correction can clear a single mistaken break out of order — so
+// read logic scans the whole window and keeps only non-blank-employee-ID
+// rows instead of stopping at the first blank.
+var TABLE3_BREAKS_COL = TABLE2_NUM_COLS + 2;
+var TABLE3_BREAKS_HEADER_ROW = TABLE1_HEADER_ROW;
+var TABLE3_BREAKS_START_ROW = TABLE1_START_ROW;
+var TABLE3_BREAKS_NUM_COLS = 3; // Employee ID, Break Start, Break End
+var BREAKS_ROW_SCAN_WINDOW = 400;
+
 // ---- Web app entry point ----------------------------------------------
 
 // Always serves the same page — Staff.html is now a single page with
@@ -111,7 +129,7 @@ function defaultEmployeeSlots_() {
   var defaults = ['Miw', 'Nureen', 'Richa'];
   var slots = [];
   for (var i = 0; i < MAX_EMPLOYEES; i++) {
-    slots.push({ id: 'EMP' + (i + 1), name: defaults[i] || '', active: !!defaults[i], pin: '' });
+    slots.push({ id: 'EMP' + (i + 1), name: defaults[i] || '', active: !!defaults[i], pin: '', flexibleHours: false });
   }
   return slots;
 }
@@ -144,7 +162,7 @@ function getActiveEmployeesWithIndex_() {
   var slots = getAllEmployeeSlots_();
   var result = [];
   slots.forEach(function (s, i) {
-    if (s.active) result.push({ id: s.id, name: s.name, idx: i, pin: s.pin || '' });
+    if (s.active) result.push({ id: s.id, name: s.name, idx: i, pin: s.pin || '', flexibleHours: !!s.flexibleHours });
   });
   return result;
 }
@@ -449,6 +467,16 @@ function ensureDaySheet(ss, date) {
     sheet.setColumnWidth(taskDoneCol_(c), 110);
   }
 
+  // Table 3: breaks (Flexible-hours employees only — see TABLE3_BREAKS_COL
+  // above). Header only; rows are appended as breaks actually happen, same
+  // as Table 2's task rows.
+  sheet.getRange(TABLE3_BREAKS_HEADER_ROW, TABLE3_BREAKS_COL, 1, TABLE3_BREAKS_NUM_COLS)
+    .setValues([['Employee ID', 'Break Start', 'Break End']]).setFontWeight('bold');
+  sheet.getRange(TABLE3_BREAKS_START_ROW, TABLE3_BREAKS_COL + 1, BREAKS_ROW_SCAN_WINDOW, 2).setNumberFormat('hh:mm:ss AM/PM');
+  sheet.setColumnWidth(TABLE3_BREAKS_COL, 100);
+  sheet.setColumnWidth(TABLE3_BREAKS_COL + 1, 110);
+  sheet.setColumnWidth(TABLE3_BREAKS_COL + 2, 110);
+
   // Seed any standing (recurring) tasks that apply to this day of the week —
   // this is what makes "Make base milk every weekday" show up on a brand-new
   // day tab with zero admin action.
@@ -573,6 +601,63 @@ function writeTaskRows_(sheet, tasks, slots) {
   applyTaskAssignedCheckboxes_(sheet);
 }
 
+// ---- Break-row helpers (Table 3) ---------------------------------------
+//
+// One range read covers the whole day's breaks regardless of how many exist
+// — same "don't pay a round trip per row/employee" discipline as
+// readTaskRows_ above, which is what the site-lag fixes earlier this project
+// were all about. Callers that need every employee's breaks (getStaffData,
+// computePayrollDay_) call this ONCE per day and filter in memory, rather
+// than once per employee.
+function readBreaksGrid_(sheet) {
+  var raw = sheet.getRange(TABLE3_BREAKS_START_ROW, TABLE3_BREAKS_COL, BREAKS_ROW_SCAN_WINDOW, TABLE3_BREAKS_NUM_COLS).getValues();
+  var rows = [];
+  for (var i = 0; i < raw.length; i++) {
+    var employeeId = raw[i][0];
+    if (!employeeId) continue; // not assumed contiguous — a cleared break can leave a gap
+    rows.push({ row: TABLE3_BREAKS_START_ROW + i, employeeId: employeeId, start: raw[i][1] || null, end: raw[i][2] || null });
+  }
+  return rows;
+}
+
+function breaksForEmployee_(sheet, employeeId) {
+  return readBreaksGrid_(sheet).filter(function (b) { return b.employeeId === employeeId; });
+}
+
+function findOpenBreak_(sheet, employeeId) {
+  var rows = breaksForEmployee_(sheet, employeeId);
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].start && !rows[i].end) return rows[i];
+  }
+  return null;
+}
+
+// Total time spent on CLOSED breaks only (both a start and an end) —
+// logAction blocks logging out while a break is still open (see below), so
+// by the time a day's hours actually feed payroll, every break on that day
+// is guaranteed either closed or simply irrelevant (no logout means 0 hours
+// either way — see hoursBetween_). breaksGrid is optional: pass an
+// already-fetched readBreaksGrid_() result to avoid re-reading it once per
+// employee in a loop (see computePayrollDay_); omit it for a one-off lookup.
+function totalBreakMsForEmployee_(employeeId, breaksGrid) {
+  var total = 0;
+  breaksGrid.forEach(function (b) {
+    if (b.employeeId === employeeId && b.start && b.end) total += Math.max(0, b.end.getTime() - b.start.getTime());
+  });
+  return total;
+}
+
+// Finds the first blank row in the breaks region to write a new break into —
+// reuses a gap left by a previously-cleared break instead of always
+// appending at the very bottom, since rows here aren't kept contiguous.
+function nextBreakRow_(sheet) {
+  var raw = sheet.getRange(TABLE3_BREAKS_START_ROW, TABLE3_BREAKS_COL, BREAKS_ROW_SCAN_WINDOW, 1).getValues();
+  for (var i = 0; i < raw.length; i++) {
+    if (!raw[i][0]) return TABLE3_BREAKS_START_ROW + i;
+  }
+  throw new Error('Too many breaks logged today.');
+}
+
 // ---- Staff page API -------------------------------------------------------
 
 function getStaffData() {
@@ -582,12 +667,17 @@ function getStaffData() {
 
   var attendance = sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, TABLE1_COLS).getValues(); // name, in, out, hours, present
   var taskRows = readTaskRows_(sheet);
+  var breaksGrid = readBreaksGrid_(sheet); // one read, reused below for every employee (not one read per employee)
 
   var employees = activeEmployees.map(function (emp) {
     var i = emp.idx;
     var inTime = attendance[i][1];
     var outTime = attendance[i][2];
     var present = !!attendance[i][4];
+    var openBreak = null;
+    for (var b = 0; b < breaksGrid.length; b++) {
+      if (breaksGrid[b].employeeId === emp.id && breaksGrid[b].start && !breaksGrid[b].end) { openBreak = breaksGrid[b]; break; }
+    }
     var tasks = [];
     for (var t = 0; t < taskRows.count; t++) {
       var doneVal = taskRows.done[t][i];
@@ -604,6 +694,9 @@ function getStaffData() {
       loginTime: inTime ? Utilities.formatDate(inTime, TIMEZONE, 'HH:mm:ss') : null,
       logoutTime: outTime ? Utilities.formatDate(outTime, TIMEZONE, 'HH:mm:ss') : null,
       present: present,
+      flexibleHours: !!emp.flexibleHours,
+      onBreak: !!openBreak,
+      breakStartTime: openBreak ? Utilities.formatDate(openBreak.start, TIMEZONE, 'HH:mm:ss') : null,
       tasks: tasks
     };
   });
@@ -635,11 +728,65 @@ function logAction(employeeId, action, pin) {
     var hasIn = sheet.getRange(row, 2).getValue();
     var existingOut = sheet.getRange(row, 3).getValue();
     if (hasIn && !existingOut) {
+      if (findOpenBreak_(sheet, employeeId)) throw new Error('End your break before logging out.');
       sheet.getRange(row, 3).setValue(now);
     }
   } else {
     throw new Error('Unknown action: ' + action);
   }
+
+  return getStaffData();
+}
+
+// ---- Breaks (Flexible-hours employees only) --------------------------
+//
+// Start/End break buttons — not a repeatable free-form log in/out — so a
+// break is always a clean start-now/end-now pair, same tap-based feel as the
+// rest of the Staff page. Any number of breaks per day is fine; each is its
+// own row in Table 3. Logging out while a break is still open is blocked
+// (see logAction above) so a day's total break time is always fully closed
+// out by the time payroll reads it.
+
+function startBreak(employeeId, pin) {
+  var slot = assertEmployeePin_(employeeId, pin);
+  if (!slot.flexibleHours) throw new Error('Flexible hours is not turned on for this employee.');
+  var sheet = getTodaySheet();
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId && s.active; });
+  if (idx === -1) throw new Error('Unknown or inactive employee: ' + employeeId);
+
+  var loginTime = sheet.getRange(TABLE1_START_ROW + idx, 2).getValue();
+  if (!loginTime) throw new Error('Log in before starting a break.');
+  var logoutTime = sheet.getRange(TABLE1_START_ROW + idx, 3).getValue();
+  if (logoutTime) throw new Error('Already logged out for today.');
+  if (findOpenBreak_(sheet, employeeId)) throw new Error('Already on a break.');
+
+  var row = nextBreakRow_(sheet);
+  sheet.getRange(row, TABLE3_BREAKS_COL, 1, TABLE3_BREAKS_NUM_COLS).setValues([[employeeId, new Date(), '']]);
+
+  return getStaffData();
+}
+
+function endBreak(employeeId, pin) {
+  assertEmployeePin_(employeeId, pin);
+  var sheet = getTodaySheet();
+  var open = findOpenBreak_(sheet, employeeId);
+  if (!open) throw new Error('Not currently on a break.');
+  sheet.getRange(open.row, TABLE3_BREAKS_COL + 2).setValue(new Date());
+
+  return getStaffData();
+}
+
+// Same-day self-undo, same idea as undoMyPunch — clears the most recent
+// break entirely (both start and end, whichever it has) rather than editing
+// a specific time; just for reverting your own accidental tap.
+function undoMyBreak(employeeId, pin) {
+  assertEmployeePin_(employeeId, pin);
+  var sheet = getTodaySheet();
+  var rows = breaksForEmployee_(sheet, employeeId);
+  if (!rows.length) throw new Error('No break to undo.');
+  var last = rows[rows.length - 1];
+  sheet.getRange(last.row, TABLE3_BREAKS_COL, 1, TABLE3_BREAKS_NUM_COLS).clearContent();
 
   return getStaffData();
 }
@@ -810,7 +957,7 @@ function getAdminData(pin, dateStr) {
     // time, and previously this omitted hasPin, silently reverting every
     // row to "Not set" on the very next reload even though the PIN was
     // still saved server-side.
-    employees: activeEmployees.map(function (e) { return { id: e.id, name: e.name, hasPin: !!e.pin }; })
+    employees: activeEmployees.map(function (e) { return { id: e.id, name: e.name, hasPin: !!e.pin, flexibleHours: !!e.flexibleHours }; })
   };
 }
 
@@ -947,7 +1094,7 @@ function copyPreviousDayTasks(pin, dateStr) {
 
 function listEmployees(pin) {
   assertPin_(pin);
-  return getActiveEmployeesWithIndex_().map(function (e) { return { id: e.id, name: e.name, hasPin: !!e.pin }; });
+  return getActiveEmployeesWithIndex_().map(function (e) { return { id: e.id, name: e.name, hasPin: !!e.pin, flexibleHours: !!e.flexibleHours }; });
 }
 
 function addEmployee(pin, name, employeePin) {
@@ -985,6 +1132,42 @@ function setEmployeePin(pin, employeeId, newPin) {
   slots[idx].pin = newPin;
   saveEmployeeSlots_(slots);
   return listEmployees(pin);
+}
+
+// Turns "Flexible hours" on/off for one employee — this is what makes the
+// Start/End break buttons show up (only for them) on the Staff page, and
+// makes their break time actually get subtracted from their hours/pay.
+// Off by default for everyone, including new hires, so nothing changes for
+// anyone unless the admin explicitly opts them in.
+function setFlexibleHours(pin, employeeId, enabled) {
+  assertPin_(pin);
+  var slots = getAllEmployeeSlots_();
+  var idx = slots.findIndex(function (s) { return s.id === employeeId; });
+  if (idx === -1 || !slots[idx].active) throw new Error('Unknown employee.');
+
+  slots[idx].flexibleHours = !!enabled;
+  saveEmployeeSlots_(slots);
+  return listEmployees(pin);
+}
+
+// Admin-only: wipes every break entry for one employee on one day (both
+// closed breaks and any stray still-open one) — a light-weight "start over"
+// correction, for when a break got tapped by mistake or left open. There's
+// no per-break time editor (breaks are simple start/end taps, not usually
+// worth hand-typing a specific corrected time the way a missed login/logout
+// is) - if a specific correction is really needed, clear it here and have
+// the employee re-tap Start/End break with the right times... or, in a
+// pinch, edit the Break Start/End cells directly in the Sheet.
+function clearBreaksForDay(pin, employeeId, dateStr) {
+  assertPin_(pin);
+  if (!dateStr) throw new Error('Pick a date.');
+  var date = parseDateStr_(dateStr);
+  var sheet = getSheetForDate(date);
+  var rows = breaksForEmployee_(sheet, employeeId);
+  rows.forEach(function (b) {
+    sheet.getRange(b.row, TABLE3_BREAKS_COL, 1, TABLE3_BREAKS_NUM_COLS).clearContent();
+  });
+  return getPayrollDay(pin, dateStr);
 }
 
 // Self-service PIN change: currentPin can be the employee's own PIN OR the
@@ -1105,9 +1288,13 @@ function saveWageRates_(map) {
 // The rate in effect for a given employee on a given date: the entry with
 // the latest effectiveFrom that is on or before dateStr, falling back to
 // DEFAULT_WAGE_RATE if nothing qualifies yet (e.g. before their first rate
-// was ever set).
-function getRateForEmployeeOnDate_(employeeId, dateStr) {
-  var history = getAllWageRates_()[employeeId] || [];
+// was ever set). ratesMap is optional - pass the result of a single
+// getAllWageRates_() call when looking up rates in a loop (a month view
+// does this once per employee per day) so the same unchanging Script
+// Property isn't re-fetched and re-JSON.parse'd on every iteration; omit it
+// for a one-off lookup and it's fetched fresh as before.
+function getRateForEmployeeOnDate_(employeeId, dateStr, ratesMap) {
+  var history = (ratesMap || getAllWageRates_())[employeeId] || [];
   var applicable = DEFAULT_WAGE_RATE;
   var best = null;
   history.forEach(function (entry) {
@@ -1119,9 +1306,13 @@ function getRateForEmployeeOnDate_(employeeId, dateStr) {
 
 function round2_(n) { return Math.round(n * 100) / 100; }
 
-function hoursBetween_(inTime, outTime) {
+// breakMs (optional): unpaid break time to subtract before converting to
+// hours — see Flexible hours / Table 3 above. Omit it (or 0) for an
+// employee who doesn't have Flexible hours turned on, same result as before
+// that feature existed.
+function hoursBetween_(inTime, outTime, breakMs) {
   if (!inTime || !outTime) return 0;
-  var ms = outTime.getTime() - inTime.getTime();
+  var ms = outTime.getTime() - inTime.getTime() - (breakMs || 0);
   return ms > 0 ? ms / 3600000 : 0;
 }
 
@@ -1135,21 +1326,38 @@ function formatHoursMins_(hoursDecimal) {
 // One row per employee SLOT (not just active ones) for a single day tab —
 // hours worked, the rate that applied that day, and pay. Blank name = that
 // slot wasn't in use that day. Callers filter/label as appropriate.
-function computePayrollDay_(sheet, dateStr, slots) {
-  var namesCol = sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, 1).getValues();
-  var inCol = sheet.getRange(TABLE1_START_ROW, 2, MAX_EMPLOYEES, 1).getValues();
-  var outCol = sheet.getRange(TABLE1_START_ROW, 3, MAX_EMPLOYEES, 1).getValues();
-  var editedCol = sheet.getRange(TABLE1_START_ROW, 6, MAX_EMPLOYEES, 2).getValues(); // [Login Edited, Logout Edited]
+// ratesMap is optional (see getRateForEmployeeOnDate_) - a month view passes
+// its own single getAllWageRates_() result through here so 8 slots x up to
+// 31 days doesn't mean up to 248 redundant PropertiesService reads for data
+// that never changes mid-request.
+//
+// The four Table 1 columns this needs (Name, Log In, Log Out, Login/Logout
+// Edited) are read in ONE range call spanning columns 1-7, not four separate
+// ones - this and the rates fix together are what actually cut down the
+// Sheets API round trips a month view makes, on top of the ensureDaySheet
+// fix from the previous round.
+//
+// anyFlexible: pass true only when at least one of `slots` has Flexible
+// hours turned on - it's what decides whether Table 3's breaks even get
+// read at all. For a team where nobody uses it (the common case), this
+// keeps the break feature completely free: zero extra Sheets API calls,
+// same round-trip count as before it existed.
+function computePayrollDay_(sheet, dateStr, slots, ratesMap, anyFlexible) {
+  var grid = sheet.getRange(TABLE1_START_ROW, 1, MAX_EMPLOYEES, TABLE1_COLS).getValues(); // Name, In, Out, Hours, Present, Login Edited, Logout Edited
+  var breaksGrid = anyFlexible ? readBreaksGrid_(sheet) : [];
   return slots.map(function (s, i) {
-    var name = namesCol[i][0] || '';
-    var inTime = inCol[i][0] || null;
-    var outTime = outCol[i][0] || null;
-    var hours = hoursBetween_(inTime, outTime);
-    var rate = getRateForEmployeeOnDate_(s.id, dateStr);
+    var row = grid[i];
+    var name = row[0] || '';
+    var inTime = row[1] || null;
+    var outTime = row[2] || null;
+    var breakMs = s.flexibleHours ? totalBreakMsForEmployee_(s.id, breaksGrid) : 0;
+    var hours = hoursBetween_(inTime, outTime, breakMs);
+    var rate = getRateForEmployeeOnDate_(s.id, dateStr, ratesMap);
     return {
       id: s.id, name: name, hours: hours, rate: rate, pay: hours * rate,
       inTime: inTime, outTime: outTime,
-      loginEdited: !!editedCol[i][0], logoutEdited: !!editedCol[i][1]
+      loginEdited: !!row[5], logoutEdited: !!row[6],
+      breakMs: breakMs
     };
   });
 }
@@ -1164,7 +1372,8 @@ function getPayrollDay(pin, dateStr) {
   var sheet = getSheetForDate(date);
   var slots = getAllEmployeeSlots_();
   var thisIso = ymdFromDate_(date);
-  var dayRows = computePayrollDay_(sheet, thisIso, slots);
+  var anyFlexible = slots.some(function (s) { return s.flexibleHours; });
+  var dayRows = computePayrollDay_(sheet, thisIso, slots, getAllWageRates_(), anyFlexible);
 
   var rows = [];
   dayRows.forEach(function (r, i) {
@@ -1179,7 +1388,9 @@ function getPayrollDay(pin, dateStr) {
       loginTime: r.inTime ? Utilities.formatDate(r.inTime, TIMEZONE, 'HH:mm') : '',
       logoutTime: r.outTime ? Utilities.formatDate(r.outTime, TIMEZONE, 'HH:mm') : '',
       loginEdited: r.loginEdited,
-      logoutEdited: r.logoutEdited
+      logoutEdited: r.logoutEdited,
+      flexibleHours: !!slots[i].flexibleHours,
+      breakMinutes: Math.round(r.breakMs / 60000)
     });
   });
 
@@ -1205,6 +1416,8 @@ function getPayrollForMonth(pin, monthIso) {
   var ss = getOrCreateMonthSpreadsheet(monthStart);
   var total = daysInMonth(monthStart);
   var slots = getAllEmployeeSlots_();
+  var rates = getAllWageRates_(); // fetched once, not once per slot per day (see computePayrollDay_)
+  var anyFlexible = slots.some(function (s) { return s.flexibleHours; }); // computed once - see computePayrollDay_
 
   var totals = slots.map(function (s) { return { id: s.id, name: s.active ? s.name : '', hours: 0, pay: 0 }; });
 
@@ -1213,7 +1426,7 @@ function getPayrollForMonth(pin, monthIso) {
     d.setDate(d.getDate() + (day - 1));
     var dateStr = ymdFromDate_(d);
     var sheet = ensureDaySheet(ss, d);
-    var dayRows = computePayrollDay_(sheet, dateStr, slots);
+    var dayRows = computePayrollDay_(sheet, dateStr, slots, rates, anyFlexible);
     dayRows.forEach(function (r, i) {
       if (r.name) totals[i].name = r.name; // most recent name seen this month for this slot, so a mid-month rename doesn't split the total
       totals[i].hours += r.hours;
@@ -1239,7 +1452,8 @@ function getMyPayrollDay(employeeId, pin, dateStr) {
   var sheet = getSheetForDate(date);
   var slots = getAllEmployeeSlots_();
   var thisIso = ymdFromDate_(date);
-  var dayRows = computePayrollDay_(sheet, thisIso, slots);
+  var anyFlexible = slots.some(function (s) { return s.flexibleHours; });
+  var dayRows = computePayrollDay_(sheet, thisIso, slots, getAllWageRates_(), anyFlexible);
   var idx = slots.findIndex(function (s) { return s.id === employeeId; });
   var r = dayRows[idx];
 
@@ -1258,7 +1472,9 @@ function getMyPayrollDay(employeeId, pin, dateStr) {
       loginTime: r.inTime ? Utilities.formatDate(r.inTime, TIMEZONE, 'HH:mm') : '',
       logoutTime: r.outTime ? Utilities.formatDate(r.outTime, TIMEZONE, 'HH:mm') : '',
       loginEdited: r.loginEdited,
-      logoutEdited: r.logoutEdited
+      logoutEdited: r.logoutEdited,
+      flexibleHours: !!slots[idx].flexibleHours,
+      breakMinutes: Math.round(r.breakMs / 60000)
     }]
   };
 }
@@ -1271,6 +1487,8 @@ function getMyPayrollForMonth(employeeId, pin, monthIso) {
   var total = daysInMonth(monthStart);
   var slots = getAllEmployeeSlots_();
   var idx = slots.findIndex(function (s) { return s.id === employeeId; });
+  var rates = getAllWageRates_(); // fetched once, not once per day (see computePayrollDay_)
+  var anyFlexible = slots.some(function (s) { return s.flexibleHours; }); // computed once - see computePayrollDay_
 
   var hours = 0, pay = 0;
   for (var day = 1; day <= total; day++) {
@@ -1278,7 +1496,7 @@ function getMyPayrollForMonth(employeeId, pin, monthIso) {
     d.setDate(d.getDate() + (day - 1));
     var dateStr = ymdFromDate_(d);
     var sheet = ensureDaySheet(ss, d);
-    var r = computePayrollDay_(sheet, dateStr, slots)[idx];
+    var r = computePayrollDay_(sheet, dateStr, slots, rates, anyFlexible)[idx];
     hours += r.hours;
     pay += r.pay;
   }

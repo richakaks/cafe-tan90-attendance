@@ -34,10 +34,10 @@
 
     <div class="card">
       <h2>Employees</h2>
-      <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet. Each person's PIN is what unlocks their own row on the Staff page - the admin PIN also works for anyone, as a master override.</p>
+      <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet. Each person's PIN is what unlocks their own row on the Staff page - the admin PIN also works for anyone, as a master override. Turn on <b>Flexible hours</b> for anyone who takes a break that shouldn't count as worked time (like stepping out for a couple hours) - Start/End break buttons show up just for them on the Staff page, and that time is automatically subtracted from their hours and pay. Off by default for everyone.</p>
       <div class="table-scroll">
       <table>
-        <thead><tr><th>Name</th><th>PIN</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>PIN</th><th>Flexible hours</th><th></th></tr></thead>
         <tbody id="employee-body"></tbody>
       </table>
       </div>
@@ -810,8 +810,15 @@ function renderPayrollDayBody_() {
     return;
   }
   body.innerHTML = payrollDayRows.map(function (r) {
-    var editedNote = (r.loginEdited || r.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
-    var row = '<tr><td>' + r.name + editedNote + '</td><td>' + (r.loginTime || '-') + '</td><td>' + (r.logoutTime || '-') + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
+    // Marked on whichever specific cell was actually corrected, not lumped
+    // into one note next to the name - a login-only correction shouldn't
+    // make the logout time look edited too, and vice versa.
+    var loginNote = r.loginEdited ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    var logoutNote = r.logoutEdited ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    // Break time subtracted, if any - only ever set for a Flexible hours
+    // employee who actually took a break that day.
+    var breakNote = (r.flexibleHours && r.breakMinutes > 0) ? ' <span class="hint">(-' + r.breakMinutes + 'm break)</span>' : '';
+    var row = '<tr><td>' + r.name + '</td><td>' + (r.loginTime || '-') + loginNote + '</td><td>' + (r.logoutTime || '-') + logoutNote + '</td><td>' + r.hoursLabel + breakNote + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
       '<td><button type="button" class="btn ghost" onclick="toggleAttendanceEditor_(\'' + r.id + '\')">Edit</button></td></tr>';
     if (openAttendanceEditorId === r.id) row += renderAttendanceEditorRow_(r);
     return row;
@@ -819,6 +826,14 @@ function renderPayrollDayBody_() {
 }
 
 function renderAttendanceEditorRow_(r) {
+  // Breaks aren't hand-edited to a specific time here (they're simple
+  // start/end taps, not usually worth a time-picker the way a missed
+  // login/logout is) - "Clear breaks" just wipes the day's break entries so
+  // the employee (or admin) can re-tap Start/End break cleanly if one was
+  // logged by mistake or left open.
+  var breakClear = (r.flexibleHours && r.breakMinutes > 0)
+    ? '<button type="button" class="btn ghost" onclick="clearBreaksFlow_(\'' + r.id + '\',\'' + r.name.replace(/'/g, "\\'") + '\')">Clear breaks (-' + r.breakMinutes + 'm)</button>'
+    : '';
   return '<tr class="repeat-editor-row"><td colspan="7"><div class="repeat-editor">' +
     '<p class="hint" style="margin:0 0 8px;">Correct ' + r.name + '\'s log in/out for this day. Leave a field blank to clear it (for example, to undo an accidental tap).</p>' +
     '<div class="buttons" style="align-items:center;">' +
@@ -826,8 +841,22 @@ function renderAttendanceEditorRow_(r) {
     '<label class="hint" style="margin:0;">Log out<br><input type="time" class="task-name-input" id="att-out-' + r.id + '" style="width:auto;" value="' + r.logoutTime + '"></label>' +
     '<button type="button" class="btn primary" onclick="submitAttendanceEdit_(\'' + r.id + '\')">Save</button>' +
     '<button type="button" class="btn ghost" onclick="closeAttendanceEditor_()">Cancel</button>' +
+    breakClear +
     '</div>' +
     '</div></td></tr>';
+}
+
+function clearBreaksFlow_(id, name) {
+  if (!confirm('Clear all of ' + name + '\'s breaks for this day? They can re-tap Start/End break if needed.')) return;
+  document.getElementById('attendance-status').textContent = 'Saving…';
+  google.script.run.withSuccessHandler(function (data) {
+    payrollDayRows = data.rows;
+    renderPayrollDayBody_();
+    document.getElementById('attendance-status').textContent = 'Cleared.';
+    loadPayrollMonth_(payrollMonthIso_());
+  }).withFailureHandler(function (e) {
+    document.getElementById('attendance-status').textContent = 'Could not clear, ' + (e && e.message ? e.message : 'try again.');
+  }).clearBreaksForDay(pin, id, payrollDayIso);
 }
 
 function toggleAttendanceEditor_(id) {
@@ -898,6 +927,8 @@ function renderEmployeeList() {
     tr.innerHTML =
       '<td><input type="text" class="task-name-input" value="' + emp.name + '" autocapitalize="words" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value, this)"></td>' +
       '<td>' + (emp.hasPin ? '<span class="hint">Set</span>' : '<span class="hint">Not set</span>') + '</td>' +
+      '<td><label class="plan-check"><input type="checkbox" ' + (emp.flexibleHours ? 'checked' : '') +
+        ' onchange="toggleFlexibleHours_(\'' + emp.id + '\', this.checked)"></label></td>' +
       '<td><button class="btn ghost" onclick="toggleEmployeePinEditor_(\'' + emp.id + '\')">PIN</button> ' +
       '<button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\', \'' + emp.name.replace(/'/g, "\\'") + '\')">✕</button></td>';
     body.appendChild(tr);
@@ -905,7 +936,7 @@ function renderEmployeeList() {
     if (openEmployeePinEditorId === emp.id) {
       var editorTr = document.createElement('tr');
       editorTr.className = 'repeat-editor-row';
-      editorTr.innerHTML = '<td colspan="3"><div class="repeat-editor">' +
+      editorTr.innerHTML = '<td colspan="4"><div class="repeat-editor">' +
         '<p class="hint" style="margin:0 0 8px;">Set or reset ' + emp.name + '\'s personal PIN (at least 4 characters) - this is what unlocks their own row on the Staff page. Leave blank and Save to remove their PIN (they can still use the admin PIN as a fallback).</p>' +
         '<div class="buttons" style="align-items:center;">' +
         '<input type="password" class="task-name-input" id="emppin-input-' + emp.id + '" placeholder="New PIN" style="width:140px;">' +
@@ -932,6 +963,18 @@ function submitEmployeePin_(id) {
   }).withFailureHandler(function (e) {
     document.getElementById('employee-status').textContent = 'Could not save PIN, ' + (e && e.message ? e.message : 'try again.');
   }).setEmployeePin(pin, id, val);
+}
+
+function toggleFlexibleHours_(id, checked) {
+  document.getElementById('employee-status').textContent = 'Saving…';
+  google.script.run.withSuccessHandler(function (result) {
+    EMPLOYEES = result;
+    renderEmployeeList();
+    document.getElementById('employee-status').textContent = 'Saved.';
+  }).withFailureHandler(function (e) {
+    document.getElementById('employee-status').textContent = 'Could not save, ' + (e && e.message ? e.message : 'try again.');
+    renderEmployeeList(); // revert the checkbox to match what's actually saved
+  }).setFlexibleHours(pin, id, checked);
 }
 
 function addEmployeeFlow() {

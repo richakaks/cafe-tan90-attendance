@@ -83,7 +83,7 @@
       <div class="table-scroll">
       <table>
         <thead>
-          <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th></tr>
+          <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th><th>Break</th></tr>
         </thead>
         <tbody id="attendance-body"></tbody>
       </table>
@@ -202,6 +202,27 @@ function logOut(id) {
     .withFailureHandler(function (e) { busy = false; onError(e); })
     .logAction(id, 'out', myPin);
 }
+function startBreak(id) {
+  if (busy || !myId) return;
+  busy = true;
+  google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
+    .withFailureHandler(function (e) { busy = false; onError(e); })
+    .startBreak(id, myPin);
+}
+function endBreak(id) {
+  if (busy || !myId) return;
+  busy = true;
+  google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
+    .withFailureHandler(function (e) { busy = false; onError(e); })
+    .endBreak(id, myPin);
+}
+function undoBreak() {
+  if (busy || !myId) return;
+  busy = true;
+  google.script.run.withSuccessHandler(function (d) { busy = false; render(d); })
+    .withFailureHandler(function (e) { busy = false; onError(e); })
+    .undoMyBreak(myId, myPin);
+}
 function markDone(id, col) {
   if (busy || !myId) return;
   busy = true;
@@ -259,14 +280,35 @@ function render(data) {
       logoutCell = '<button class="time-btn out-logged" disabled>Out · ' + emp.logoutTime + '</button>' +
         (isMe ? ' <a href="javascript:void(0)" class="hint" onclick="undoPunch(\'out\')">Undo</a>' : '');
     } else {
-      logoutCell = '<button class="time-btn" ' + (!emp.loginTime || !isMe ? 'disabled' : '') + ' onclick="logOut(\'' + emp.id + '\')">Log out</button>';
+      // Also disabled while on a break - has to end the break first (server
+      // enforces this too; disabling here is just so the button doesn't sit
+      // there inviting a tap that will only fail).
+      logoutCell = '<button class="time-btn" ' + (!emp.loginTime || !isMe || emp.onBreak ? 'disabled' : '') + ' onclick="logOut(\'' + emp.id + '\')">Log out</button>';
+    }
+
+    // Break column - only shown as usable for employees with Flexible hours
+    // turned on (admin's Employees section), and only while they're clocked
+    // in for the day. Everyone else just sees a dash, same convention as an
+    // unassigned task cell.
+    var breakCell;
+    if (!emp.flexibleHours || !emp.loginTime || emp.logoutTime) {
+      breakCell = '<span class="hint">–</span>';
+    } else if (emp.onBreak) {
+      breakCell = '<span class="pill on-break">On break · ' + emp.breakStartTime + '</span>';
+      if (isMe) {
+        breakCell += ' <button class="time-btn" onclick="endBreak(\'' + emp.id + '\')">End break</button>' +
+          ' <a href="javascript:void(0)" class="hint" onclick="undoBreak()">Undo</a>';
+      }
+    } else {
+      breakCell = '<button class="time-btn" ' + (isMe ? '' : 'disabled') + ' onclick="startBreak(\'' + emp.id + '\')">Start break</button>';
     }
 
     tr.innerHTML =
       '<td class="name-cell">' + emp.name + (locked ? ' <span class="hint">🔒</span>' : '') + '</td>' +
       '<td><span class="pill ' + (emp.present ? 'present' : 'absent') + '">' + (emp.present ? 'Present' : 'Not in yet') + '</span></td>' +
       '<td>' + loginCell + '</td>' +
-      '<td>' + logoutCell + '</td>';
+      '<td>' + logoutCell + '</td>' +
+      '<td>' + breakCell + '</td>';
     body.appendChild(tr);
   });
 
@@ -328,9 +370,16 @@ function loadMyPayrollDay_(iso) {
   google.script.run.withSuccessHandler(function (data) {
     document.getElementById('myhours-day-label').textContent = data.dateLabel + (data.isToday ? ' (today)' : '');
     var r = data.rows[0];
-    var editedNote = (r.loginEdited || r.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    // Marked on the specific time that was actually corrected (see the
+    // matching comment in Admin.html), not a single note that fires for
+    // either field.
+    var loginNote = r.loginEdited ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    var logoutNote = r.logoutEdited ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    // Break time subtracted, if any - only ever non-zero for a Flexible
+    // hours employee who actually took a break that day.
+    var breakNote = (r.flexibleHours && r.breakMinutes > 0) ? ' <span class="hint">(-' + r.breakMinutes + 'm break)</span>' : '';
     document.getElementById('myhours-day-body').innerHTML =
-      '<tr><td>' + (r.loginTime || '-') + '</td><td>' + (r.logoutTime || '-') + '</td><td>' + r.hoursLabel + editedNote + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td></tr>';
+      '<tr><td>' + (r.loginTime || '-') + loginNote + '</td><td>' + (r.logoutTime || '-') + logoutNote + '</td><td>' + r.hoursLabel + breakNote + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td></tr>';
   }).withFailureHandler(function () {
     document.getElementById('myhours-day-body').innerHTML = '<tr><td colspan="5" class="hint">Could not load that day.</td></tr>';
   }).getMyPayrollDay(myId, myPin, iso);

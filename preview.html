@@ -60,6 +60,7 @@
   .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
   .pill.present { background: var(--green-bg); color: var(--green-text); }
   .pill.absent { background: var(--muted-bg); color: var(--text-secondary); }
+  .pill.on-break { background: var(--amber-bg); color: var(--amber-text); }
 
   .time-btn {
     font-family: inherit; font-size: 13px; font-weight: 500; padding: 9px 16px;
@@ -261,7 +262,7 @@
       <div class="table-scroll">
       <table>
         <thead>
-          <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th></tr>
+          <tr><th>Name</th><th>Status</th><th>Log in</th><th>Log out</th><th>Break</th></tr>
         </thead>
         <tbody id="attendance-body"></tbody>
       </table>
@@ -311,10 +312,10 @@
 
       <div class="card">
         <h2>Employees</h2>
-        <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet. Each person's PIN is what unlocks their own row on the Staff page - the admin PIN also works for anyone, as a master override.</p>
+        <p class="hint">Add, rename, or remove staff (up to 8). Removing someone hides them from the staff page and task list from today onward; their past attendance history stays exactly as it was in the Sheet. Each person's PIN is what unlocks their own row on the Staff page - the admin PIN also works for anyone, as a master override. Turn on <b>Flexible hours</b> for anyone who takes a break that shouldn't count as worked time (like stepping out for a couple hours) - Start/End break buttons show up just for them on the Staff page, and that time is automatically subtracted from their hours and pay. Off by default for everyone.</p>
         <div class="table-scroll">
         <table>
-          <thead><tr><th>Name</th><th>PIN</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>PIN</th><th>Flexible hours</th><th></th></tr></thead>
           <tbody id="employee-body"></tbody>
         </table>
         </div>
@@ -461,9 +462,12 @@
 
 var state = {
   employees: [
-    { id: 'MIW', name: 'Miw', pin: '1111', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false },
-    { id: 'NUREEN', name: 'Nureen', pin: '2222', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false },
-    { id: 'RICHA', name: 'Richa', pin: '3333', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false }
+    { id: 'MIW', name: 'Miw', pin: '1111', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false, flexibleHours: false, onBreak: false, breakStartTime: null, breaks: [] },
+    { id: 'NUREEN', name: 'Nureen', pin: '2222', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false, flexibleHours: false, onBreak: false, breakStartTime: null, breaks: [] },
+    // Flexible hours starts ON for Richa in this preview (off by default for
+    // everyone in the real app) purely so the new feature is visible without
+    // having to click into Admin > Employees first to turn it on.
+    { id: 'RICHA', name: 'Richa', pin: '3333', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false, flexibleHours: true, onBreak: false, breakStartTime: null, breaks: [] }
   ],
   standingTasks: [
     { id: 'STD1', name: 'Make base milk', days: [1, 2, 3, 4, 5], assignments: { MIW: true, NUREEN: false, RICHA: false } },
@@ -603,8 +607,47 @@ function logIn(id) {
 function logOut(id) {
   if (id !== myId) return;
   var emp = state.employees.find(function (e) { return e.id === id; });
-  if (!emp.loginTime || emp.logoutTime) return;
+  if (!emp.loginTime || emp.logoutTime || emp.onBreak) return;
   emp.logoutTime = nowTimeStr();
+  renderStaff();
+}
+
+// ---- Breaks (Flexible hours employees only) — Start/End buttons, not a
+// repeatable free-form log in/out, mirrors Code.gs's startBreak/endBreak.
+// Logging out is blocked while a break is open (see logOut above); any
+// number of breaks per day is fine, each just appends to emp.breaks once
+// closed. ----
+
+function startBreak(id) {
+  if (id !== myId) return;
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp || !emp.flexibleHours || !emp.loginTime || emp.logoutTime || emp.onBreak) return;
+  emp.onBreak = true;
+  emp.breakStartTime = nowTimeStr();
+  renderStaff();
+}
+function endBreak(id) {
+  if (id !== myId) return;
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp || !emp.onBreak) return;
+  emp.breaks.push({ start: emp.breakStartTime, end: nowTimeStr() });
+  emp.onBreak = false;
+  emp.breakStartTime = null;
+  renderStaff();
+}
+// Same-day self-undo, same idea as undoPunch — clears the most recent break
+// entirely (whether it's the currently-open one, or the last closed one)
+// rather than editing a specific time.
+function undoBreak() {
+  if (!myId) return;
+  var emp = state.employees.find(function (e) { return e.id === myId; });
+  if (!emp) return;
+  if (emp.onBreak) {
+    emp.onBreak = false;
+    emp.breakStartTime = null;
+  } else if (emp.breaks.length) {
+    emp.breaks.pop();
+  }
   renderStaff();
 }
 function markDone(id, ti) {
@@ -658,14 +701,31 @@ function renderStaff() {
       logoutCell = '<button class="time-btn out-logged" disabled>Out · ' + emp.logoutTime + '</button>' +
         (isMe ? ' <a href="javascript:void(0)" class="hint" onclick="undoPunch(\'out\')">Undo</a>' : '');
     } else {
-      logoutCell = '<button class="time-btn" ' + (!emp.loginTime || !isMe ? 'disabled' : '') + ' onclick="logOut(\'' + emp.id + '\')">Log out</button>';
+      // Also disabled while on a break - has to end the break first.
+      logoutCell = '<button class="time-btn" ' + (!emp.loginTime || !isMe || emp.onBreak ? 'disabled' : '') + ' onclick="logOut(\'' + emp.id + '\')">Log out</button>';
+    }
+
+    // Break column - only usable for employees with Flexible hours turned
+    // on (Admin > Employees), and only while clocked in for the day.
+    var breakCell;
+    if (!emp.flexibleHours || !emp.loginTime || emp.logoutTime) {
+      breakCell = '<span class="hint">–</span>';
+    } else if (emp.onBreak) {
+      breakCell = '<span class="pill on-break">On break · ' + emp.breakStartTime + '</span>';
+      if (isMe) {
+        breakCell += ' <button class="time-btn" onclick="endBreak(\'' + emp.id + '\')">End break</button>' +
+          ' <a href="javascript:void(0)" class="hint" onclick="undoBreak()">Undo</a>';
+      }
+    } else {
+      breakCell = '<button class="time-btn" ' + (isMe ? '' : 'disabled') + ' onclick="startBreak(\'' + emp.id + '\')">Start break</button>';
     }
 
     tr.innerHTML =
       '<td class="name-cell">' + emp.name + (locked ? ' <span class="hint">🔒</span>' : '') + '</td>' +
       '<td><span class="pill ' + (emp.present ? 'present' : 'absent') + '">' + (emp.present ? 'Present' : 'Not in yet') + '</span></td>' +
       '<td>' + loginCell + '</td>' +
-      '<td>' + logoutCell + '</td>';
+      '<td>' + logoutCell + '</td>' +
+      '<td>' + breakCell + '</td>';
     body.appendChild(tr);
   });
   renderTaskTable();
@@ -760,12 +820,16 @@ function loadMyPayrollDay_(iso) {
   var todayIso = ymd_(startOfDay_(new Date()));
   document.getElementById('myhours-day-label').textContent = formatDateLabel_(parseIso_(iso)) + (iso === todayIso ? ' (today)' : '');
   var att = getAttendanceForDay_(iso, myId);
-  var hours = hoursFromTimes_(att.loginTime, att.logoutTime);
+  var hours = hoursFromTimes_(att.loginTime, att.logoutTime, att.breakMinutes);
   var rate = getRateForEmployeeOnDate_(myId, iso);
   var pay = Math.round(hours * rate * 100) / 100;
-  var editedNote = (att.loginEdited || att.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+  // Marked on the specific time that was actually corrected (mirrors
+  // Staff.html/Admin.html), not a single note that fires for either field.
+  var loginNote = att.loginEdited ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+  var logoutNote = att.logoutEdited ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+  var breakNote = (att.flexibleHours && att.breakMinutes > 0) ? ' <span class="hint">(-' + att.breakMinutes + 'm break)</span>' : '';
   document.getElementById('myhours-day-body').innerHTML =
-    '<tr><td>' + (att.loginTime ? att.loginTime.slice(0, 5) : '-') + '</td><td>' + (att.logoutTime ? att.logoutTime.slice(0, 5) : '-') + '</td><td>' + formatHoursMins_(hours) + editedNote + '</td><td>฿' + rate + '/hr</td><td>฿' + pay.toFixed(2) + '</td></tr>';
+    '<tr><td>' + (att.loginTime ? att.loginTime.slice(0, 5) : '-') + loginNote + '</td><td>' + (att.logoutTime ? att.logoutTime.slice(0, 5) : '-') + logoutNote + '</td><td>' + formatHoursMins_(hours) + breakNote + '</td><td>฿' + rate + '/hr</td><td>฿' + pay.toFixed(2) + '</td></tr>';
 }
 function myPayrollPrevDay() { loadMyPayrollDay_(shiftIso_(myPayrollDayIso, -1)); }
 function myPayrollNextDay() { loadMyPayrollDay_(shiftIso_(myPayrollDayIso, 1)); }
@@ -779,7 +843,7 @@ function loadMyPayrollMonth_() {
   for (var day = 1; day <= todayDate; day++) {
     var iso = d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(day);
     var att = getAttendanceForDay_(iso, myId);
-    var h = hoursFromTimes_(att.loginTime, att.logoutTime);
+    var h = hoursFromTimes_(att.loginTime, att.logoutTime, att.breakMinutes);
     hours += h;
     pay += h * getRateForEmployeeOnDate_(myId, iso);
   }
@@ -877,10 +941,22 @@ var payrollMonth = new Date();
 payrollMonth.setDate(1);
 
 function timeStrToMinutes_(t) { var p = t.split(':').map(Number); return p[0] * 60 + p[1] + (p[2] || 0) / 60; }
-function hoursFromTimes_(inStr, outStr) {
+// breakMinutes (optional): unpaid break time to subtract, for a Flexible
+// hours employee - mirrors Code.gs's hoursBetween_(inTime, outTime, breakMs).
+function hoursFromTimes_(inStr, outStr, breakMinutes) {
   if (!inStr || !outStr) return 0;
-  var mins = timeStrToMinutes_(outStr) - timeStrToMinutes_(inStr);
+  var mins = timeStrToMinutes_(outStr) - timeStrToMinutes_(inStr) - (breakMinutes || 0);
   return mins > 0 ? mins / 60 : 0;
+}
+// Total CLOSED-break minutes for TODAY only (the only day this preview
+// tracks live break taps for) - an open break isn't counted, same reasoning
+// as Code.gs's totalBreakMsForEmployee_ (logging out is blocked while a
+// break is open, so by the time hours are read every break is closed).
+function breakMinutesForToday_(empId) {
+  var emp = state.employees.find(function (e) { return e.id === empId; });
+  if (!emp || !emp.flexibleHours || !emp.breaks || !emp.breaks.length) return 0;
+  var mins = emp.breaks.reduce(function (sum, b) { return sum + (timeStrToMinutes_(b.end) - timeStrToMinutes_(b.start)); }, 0);
+  return Math.round(mins); // whole minutes, same as Code.gs's Math.round(r.breakMs / 60000)
 }
 function formatHoursMins_(hoursDecimal) {
   var totalMin = Math.round(hoursDecimal * 60);
@@ -915,27 +991,37 @@ function getRateForEmployeeOnDate_(empId, dateIso) {
 // there's still something to look at and correct.
 function getAttendanceForDay_(iso, empId) {
   var todayIso = ymd_(startOfDay_(new Date()));
+  var emp = state.employees.find(function (e) { return e.id === empId; });
+  var flexibleHours = !!(emp && emp.flexibleHours);
   if (iso === todayIso) {
-    var emp = state.employees.find(function (e) { return e.id === empId; });
     return {
       loginTime: (emp && emp.loginTime) || '',
       logoutTime: (emp && emp.logoutTime) || '',
       loginEdited: !!(emp && emp.loginEdited),
-      logoutEdited: !!(emp && emp.logoutEdited)
+      logoutEdited: !!(emp && emp.logoutEdited),
+      flexibleHours: flexibleHours,
+      breakMinutes: breakMinutesForToday_(empId)
     };
   }
   var override = (state.attendanceOverrides[iso] || {})[empId];
-  if (override) return override;
+  if (override) {
+    var withFlex = copyObj_(override);
+    withFlex.flexibleHours = flexibleHours;
+    withFlex.breakMinutes = 0; // breaks aren't modeled for non-today corrected days
+    return withFlex;
+  }
 
   var hours = demoHoursForDay_(iso, empId);
-  if (!hours) return { loginTime: '', logoutTime: '', loginEdited: false, logoutEdited: false };
+  if (!hours) return { loginTime: '', logoutTime: '', loginEdited: false, logoutEdited: false, flexibleHours: flexibleHours, breakMinutes: 0 };
   var totalMin = Math.round(hours * 60);
   var endTotal = 9 * 60 + totalMin; // demo days start at 09:00
   return {
     loginTime: '09:00:00',
     logoutTime: pad2_(Math.floor(endTotal / 60)) + ':' + pad2_(endTotal % 60) + ':00',
     loginEdited: false,
-    logoutEdited: false
+    logoutEdited: false,
+    flexibleHours: flexibleHours,
+    breakMinutes: 0 // breaks aren't modeled for non-today demo days, same as the rest of the synthetic history here
   };
 }
 
@@ -1006,12 +1092,13 @@ function loadPayrollDay_(iso) {
   document.getElementById('payroll-day-label').textContent = formatDateLabel_(parseIso_(iso)) + (isToday ? ' (today)' : '');
   payrollDayRows = state.employees.map(function (emp) {
     var att = getAttendanceForDay_(iso, emp.id);
-    var hours = hoursFromTimes_(att.loginTime, att.logoutTime);
+    var hours = hoursFromTimes_(att.loginTime, att.logoutTime, att.breakMinutes);
     var rate = getRateForEmployeeOnDate_(emp.id, iso);
     return {
       id: emp.id, name: emp.name, hoursLabel: formatHoursMins_(hours), rate: rate, pay: Math.round(hours * rate * 100) / 100,
       loginTime: att.loginTime ? att.loginTime.slice(0, 5) : '', logoutTime: att.logoutTime ? att.logoutTime.slice(0, 5) : '',
-      loginEdited: att.loginEdited, logoutEdited: att.logoutEdited
+      loginEdited: att.loginEdited, logoutEdited: att.logoutEdited,
+      flexibleHours: att.flexibleHours, breakMinutes: att.breakMinutes
     };
   });
   renderPayrollDayBody_();
@@ -1024,8 +1111,10 @@ function renderPayrollDayBody_() {
     return;
   }
   body.innerHTML = payrollDayRows.map(function (r) {
-    var editedNote = (r.loginEdited || r.logoutEdited) ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
-    var row = '<tr><td>' + r.name + editedNote + '</td><td>' + (r.loginTime || '-') + '</td><td>' + (r.logoutTime || '-') + '</td><td>' + r.hoursLabel + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
+    var loginNote = r.loginEdited ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    var logoutNote = r.logoutEdited ? ' <span class="hint" style="font-style:italic;">(edited)</span>' : '';
+    var breakNote = (r.flexibleHours && r.breakMinutes > 0) ? ' <span class="hint">(-' + r.breakMinutes + 'm break)</span>' : '';
+    var row = '<tr><td>' + r.name + '</td><td>' + (r.loginTime || '-') + loginNote + '</td><td>' + (r.logoutTime || '-') + logoutNote + '</td><td>' + r.hoursLabel + breakNote + '</td><td>฿' + r.rate + '/hr</td><td>฿' + r.pay.toFixed(2) + '</td>' +
       '<td><button type="button" class="btn ghost" onclick="toggleAttendanceEditor_(\'' + r.id + '\')">Edit</button></td></tr>';
     if (openAttendanceEditorId === r.id) row += renderAttendanceEditorRow_(r);
     return row;
@@ -1033,6 +1122,12 @@ function renderPayrollDayBody_() {
 }
 
 function renderAttendanceEditorRow_(r) {
+  // "Clear breaks" only ever shows for today (the only day this preview
+  // tracks live break taps for), mirroring how it only shows for a Flexible
+  // hours employee who actually has break minutes to clear.
+  var breakClear = (r.flexibleHours && r.breakMinutes > 0)
+    ? '<button type="button" class="btn ghost" onclick="clearBreaksFlow_(\'' + r.id + '\')">Clear breaks (-' + r.breakMinutes + 'm)</button>'
+    : '';
   return '<tr class="repeat-editor-row"><td colspan="7"><div class="repeat-editor">' +
     '<p class="hint" style="margin:0 0 8px;">Correct ' + r.name + '\'s log in/out for this day. Leave a field blank to clear it (for example, to undo an accidental tap).</p>' +
     '<div class="buttons" style="align-items:center;">' +
@@ -1040,8 +1135,22 @@ function renderAttendanceEditorRow_(r) {
     '<label class="hint" style="margin:0;">Log out<br><input type="time" class="task-name-input" id="att-out-' + r.id + '" style="width:auto;" value="' + r.logoutTime + '"></label>' +
     '<button type="button" class="btn primary" onclick="submitAttendanceEdit_(\'' + r.id + '\')">Save</button>' +
     '<button type="button" class="btn ghost" onclick="closeAttendanceEditor_()">Cancel</button>' +
+    breakClear +
     '</div>' +
     '</div></td></tr>';
+}
+
+function clearBreaksFlow_(id) {
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp) return;
+  if (!confirm('Clear all of ' + emp.name + '\'s breaks for this day? They can re-tap Start/End break if needed.')) return;
+  emp.breaks = [];
+  emp.onBreak = false;
+  emp.breakStartTime = null;
+  loadPayrollDay_(payrollDayIso);
+  loadPayrollMonth_(payrollMonthIso_());
+  document.getElementById('attendance-status').textContent = 'Cleared.';
+  renderStaff();
 }
 
 function toggleAttendanceEditor_(id) {
@@ -1105,7 +1214,7 @@ function loadPayrollMonth_(monthIso) {
     if (iso > todayIso) continue; // future days: nobody's logged in yet, same as the real app
     state.employees.forEach(function (emp, i) {
       var att = getAttendanceForDay_(iso, emp.id);
-      var hours = hoursFromTimes_(att.loginTime, att.logoutTime);
+      var hours = hoursFromTimes_(att.loginTime, att.logoutTime, att.breakMinutes);
       var rate = getRateForEmployeeOnDate_(emp.id, iso);
       totals[i].hours += hours;
       totals[i].pay += hours * rate;
@@ -1590,6 +1699,8 @@ function renderEmployeeList() {
     tr.innerHTML =
       '<td><input type="text" class="task-name-input" value="' + emp.name + '" autocapitalize="words" onchange="renameEmployeeFlow(\'' + emp.id + '\', this.value, this)"></td>' +
       '<td>' + (emp.pin ? '<span class="hint">Set</span>' : '<span class="hint">Not set</span>') + '</td>' +
+      '<td><label class="plan-check"><input type="checkbox" ' + (emp.flexibleHours ? 'checked' : '') +
+        ' onchange="toggleFlexibleHours_(\'' + emp.id + '\', this.checked)"></label></td>' +
       '<td><button class="btn ghost" onclick="toggleEmployeePinEditor_(\'' + emp.id + '\')">PIN</button> ' +
       '<button class="btn ghost" onclick="removeEmployeeFlow(\'' + emp.id + '\')">✕</button></td>';
     body.appendChild(tr);
@@ -1597,7 +1708,7 @@ function renderEmployeeList() {
     if (openEmployeePinEditorId === emp.id) {
       var editorTr = document.createElement('tr');
       editorTr.className = 'repeat-editor-row';
-      editorTr.innerHTML = '<td colspan="3"><div class="repeat-editor">' +
+      editorTr.innerHTML = '<td colspan="4"><div class="repeat-editor">' +
         '<p class="hint" style="margin:0 0 8px;">Set or reset ' + emp.name + '\'s personal PIN (at least 4 characters) - this is what unlocks their own row on the Staff page. Leave blank and Save to remove their PIN (they can still use the admin PIN as a fallback).</p>' +
         '<div class="buttons" style="align-items:center;">' +
         '<input type="password" class="task-name-input" id="emppin-input-' + emp.id + '" placeholder="New PIN" style="width:140px;">' +
@@ -1623,6 +1734,16 @@ function submitEmployeePin_(id) {
   document.getElementById('employee-status').textContent = 'PIN saved.';
 }
 
+function toggleFlexibleHours_(id, checked) {
+  var emp = state.employees.find(function (e) { return e.id === id; });
+  if (!emp) return;
+  emp.flexibleHours = checked;
+  if (!checked) { emp.onBreak = false; emp.breakStartTime = null; } // turning it off mid-break just drops the in-progress break, same as the real app has no "orphaned" break state to worry about once it's not read anymore
+  renderEmployeeList();
+  renderStaff();
+  document.getElementById('employee-status').textContent = 'Saved.';
+}
+
 function addEmployeeFlow() {
   if (state.employees.length >= 8) { alert('Preview caps this at 8 employees. Remove someone first.'); return; }
   var name = prompt("New employee's name:");
@@ -1630,7 +1751,7 @@ function addEmployeeFlow() {
   name = capitalizeWords_(name);
   var empPin = prompt(name + "'s starting PIN (at least 4 characters, or leave blank to set later):");
   var id = 'EMP' + (employeeSeq++);
-  state.employees.push({ id: id, name: name, pin: empPin || '', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false });
+  state.employees.push({ id: id, name: name, pin: empPin || '', loginTime: null, logoutTime: null, present: false, loginEdited: false, logoutEdited: false, flexibleHours: false, onBreak: false, breakStartTime: null, breaks: [] });
   state.completions[id] = {};
   Object.keys(state.days).forEach(function (iso) {
     state.days[iso].tasks.forEach(function (t) { t.assignments[id] = false; });
